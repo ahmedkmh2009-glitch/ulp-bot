@@ -965,10 +965,6 @@ class AdvancedCreditSystem:
             ''')
             conn.commit()
 
-# ============================================================================
-# MANEJADORES COMPLETOS DE TELEGRAM
-# ============================================================================
-
 class CompleteTelegramBot:
     """Manejador completo con todos los comandos"""
     
@@ -977,6 +973,33 @@ class CompleteTelegramBot:
         self.credit_system = credit_system
         self.pending_searches: Dict[int, Dict] = {}
         self.admin_actions: Dict[int, Dict] = {}
+    
+    # ==================== FUNCIONES DE ESCAPE ====================
+    
+    def escape_markdown(self, text: str) -> str:
+        """Escapar caracteres especiales de MarkdownV2"""
+        if not text:
+            return ""
+        escape_chars = r'_*[]()~`>#+-=|{}.!'
+        escaped = []
+        for char in str(text):
+            if char in escape_chars:
+                escaped.append('\\' + char)
+            else:
+                escaped.append(char)
+        return ''.join(escaped)
+    
+    def escape_html(self, text: str) -> str:
+        """Escapar caracteres para HTML"""
+        if not text:
+            return ""
+        text = str(text)
+        text = text.replace('&', '&amp;')
+        text = text.replace('<', '&lt;')
+        text = text.replace('>', '&gt;')
+        text = text.replace('"', '&quot;')
+        text = text.replace("'", '&#39;')
+        return text
     
     # ==================== COMANDOS PRINCIPALES ====================
     
@@ -2556,8 +2579,8 @@ NOTAS
                 stats = self.search_engine.get_stats()
                 
                 await msg.edit_text(
-                    f"✅ *ARCHIVO PROCESADO CORRECTAMENTE*\n\n"
-                    f"*Nombre:* `{document.file_name}`\n"
+                    f"✅ <b>ARCHIVO PROCESADO CORRECTAMENTE</b>\n\n"
+                    f"<b>Nombre:</b> <code>{self.escape_html(document.file_name)}</code>\n"
                     f"*Tamaño:* {document.file_size / 1024:.0f} KB\n"
                     f"*Líneas totales:* {total_lines:,}\n"
                     f"*Líneas válidas:* {valid_lines:,}\n\n"
@@ -2567,7 +2590,7 @@ NOTAS
                     f"• Emails indexados: `{stats['total_emails']:,}`\n\n"
                     f"👑 *Subido por:* @{update.effective_user.username or update.effective_user.first_name}\n\n"
                     f"✅ *Archivo listo para búsquedas*",
-                    parse_mode='Markdown'
+                    parse_mode='HTML'
                 )
             else:
                 os.remove(temp_path)
@@ -2578,14 +2601,14 @@ NOTAS
                     parse_mode='Markdown'
                 )
         
-        except Exception as e:
-            logger.error(f"Error procesando archivo: {e}")
-            await msg.edit_text(
-                f"❌ *ERROR CRÍTICO*\n\n"
-                f"Error: {str(e)[:200]}\n\n"
-                f"*Archivo:* `{document.file_name}`",
-                parse_mode='Markdown'
-            )
+                except Exception as e:
+        logger.error(f"Error procesando archivo: {e}")
+        await msg.edit_text(
+            f"❌ <b>ERROR CRÍTICO</b>\n\n"
+            f"Error: {self.escape_html(str(e)[:200])}\n\n"
+            f"<b>Archivo:</b> <code>{self.escape_html(document.file_name)}</code>",
+            parse_mode='HTML'
+        )
     
     # ==================== MANEJADOR DE BOTONES GENERAL ====================
     
