@@ -1,15 +1,13 @@
 services:
   - type: web
-    name: ulp-searcher-bot
+    name: ulp-bot-completo
     env: python
-    region: frankfurt  # Más cerca de España
+    region: frankfurt
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     envVars:
       - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: ULP_API_TOKEN
         sync: false
       - key: ADMIN_IDS
         sync: false
