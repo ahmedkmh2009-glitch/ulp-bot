@@ -776,7 +776,258 @@ class LargeFileProcessor:
 # ============================================================================
 
 class ULPBot:
-    def __init__(self, search_engine: SearchEngine, credit_system: CreditSystem):
+
+    # Añade estas funciones a la clase ULPBot:
+
+async def upload_large_system(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sistema de upload para archivos grandes (por partes)"""
+    user_id = update.effective_user.id
+    
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Admins only.")
+        return
+    
+    # Crear sesión de upload única
+    upload_id = f"upload_{user_id}_{int(time.time())}"
+    self.active_uploads[upload_id] = {
+        'parts': [],
+        'total_parts': 0,
+        'original_filename': '',
+        'start_time': time.time(),
+        'user_id': user_id
+    }
+    
+    await update.message.reply_text(
+        f"📦 <b>LARGE FILE UPLOAD SYSTEM</b>\n\n"
+        f"<b>Upload ID:</b> <code>{upload_id}</code>\n\n"
+        f"<b>📝 INSTRUCCIONES:</b>\n"
+        f"1. <b>Divide tu archivo</b> en partes de 20MB\n"
+        f"2. <b>Nombra las partes:</b> archivo.part001, archivo.part002, etc.\n"
+        f"3. <b>Envía las partes</b> una por una al bot\n"
+        f"4. <b>Cuando termines</b>, envía: <code>/finishupload {upload_id}</code>\n\n"
+        f"<b>🔧 HERRAMIENTAS:</b>\n"
+        f"• 7zip: <code>7z a -v20m archivo.7z tu_archivo.txt</code>\n"
+        f"• WinRAR: Dividir en volúmenes\n"
+        f"• HJSplit (Windows)\n\n"
+        f"<i>El bot combinará las partes automáticamente</i>",
+        parse_mode='HTML'
+    )
+
+async def handle_file_part(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manejar partes de archivos grandes"""
+    user_id = update.effective_user.id
+    
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Admins only.")
+        return
+    
+    if not update.message.document:
+        return
+    
+    document = update.message.document
+    filename = document.file_name
+    
+    # Verificar si es parte de archivo
+    if '.part' in filename.lower() or filename.lower().endswith(('.001', '.002', '.003')):
+        await self._process_file_part(update, document, filename, user_id)
+    else:
+        # Archivo normal - usar sistema antiguo
+        await self.handle_large_file_upload(update, context)
+
+async def _process_file_part(self, update, document, filename, user_id):
+    """Procesar una parte de archivo"""
+    import re
+    
+    msg = await update.message.reply_text(f"📥 <b>Processing part: {filename}</b>", parse_mode='HTML')
+    
+    try:
+        # Extraer nombre base y número de parte
+        base_name = None
+        part_num = None
+        
+        # Patrones: archivo.part001, archivo.001, archivo.r00, etc.
+        patterns = [
+            r'(.+)\.part(\d+)',  # archivo.part001
+            r'(.+)\.(\d{3})$',   # archivo.001
+            r'(.+)\.r(\d{2})$',  # archivo.r00 (rar)
+            r'(.+)\.z(\d{2})$',  # archivo.z01 (zip)
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, filename.lower())
+            if match:
+                base_name = match.group(1)
+                part_num = int(match.group(2))
+                break
+        
+        if not base_name or part_num is None:
+            await msg.edit_text(f"❌ <b>Invalid part filename: {filename}</b>", parse_mode='HTML')
+            return
+        
+        # Descargar parte
+        file = await document.get_file()
+        
+        # Directorio para este upload
+        upload_dir = os.path.join(UPLOAD_TEMP_DIR, f"multipart_{base_name}_{user_id}")
+        os.makedirs(upload_dir, exist_ok=True)
+        
+        part_path = os.path.join(upload_dir, f"part_{part_num:03d}")
+        await file.download_to_drive(part_path)
+        
+        # Actualizar registro de partes
+        parts_file = os.path.join(upload_dir, "parts.json")
+        parts_data = {}
+        
+        if os.path.exists(parts_file):
+            with open(parts_file, 'r') as f:
+                parts_data = json.load(f)
+        
+        parts_data[str(part_num)] = {
+            'filename': filename,
+            'size': document.file_size,
+            'downloaded': True,
+            'path': part_path
+        }
+        
+        with open(parts_file, 'w') as f:
+            json.dump(parts_data, f)
+        
+        total_parts = len(parts_data)
+        
+        await msg.edit_text(
+            f"✅ <b>PART RECEIVED</b>\n\n"
+            f"<b>File:</b> {base_name}\n"
+            f"<b>Part:</b> {filename} (#{part_num})\n"
+            f"<b>Size:</b> {document.file_size/(1024*1024):.1f} MB\n"
+            f"<b>Total parts received:</b> {total_parts}\n\n"
+            f"<i>Send next part or finish with:</i>\n"
+            f"<code>/finishupload {base_name}</code>",
+            parse_mode='HTML'
+        )
+        
+    except Exception as e:
+        await msg.edit_text(f"❌ <b>Error:</b> {str(e)[:200]}", parse_mode='HTML')
+
+async def finish_upload_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Finalizar upload de partes y combinarlas"""
+    user_id = update.effective_user.id
+    
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Admins only.")
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            "❌ <b>Usage:</b> <code>/finishupload base_name</code>\n\n"
+            "<b>Example:</b> <code>/finishupload mydatabase</code>",
+            parse_mode='HTML'
+        )
+        return
+    
+    base_name = context.args[0]
+    upload_dir = os.path.join(UPLOAD_TEMP_DIR, f"multipart_{base_name}_{user_id}")
+    
+    if not os.path.exists(upload_dir):
+        await update.message.reply_text(f"❌ No upload found for: {base_name}")
+        return
+    
+    msg = await update.message.reply_text(f"🔄 <b>Combining parts for {base_name}...</b>", parse_mode='HTML')
+    
+    try:
+        # Leer información de partes
+        parts_file = os.path.join(upload_dir, "parts.json")
+        if not os.path.exists(parts_file):
+            await msg.edit_text("❌ No parts information found")
+            return
+        
+        with open(parts_file, 'r') as f:
+            parts_data = json.load(f)
+        
+        # Combinar partes en orden
+        combined_file = os.path.join(upload_dir, f"{base_name}_combined.txt")
+        
+        with open(combined_file, 'wb') as outfile:
+            for part_num in sorted([int(k) for k in parts_data.keys()]):
+                part_info = parts_data[str(part_num)]
+                part_path = part_info['path']
+                
+                if os.path.exists(part_path):
+                    with open(part_path, 'rb') as infile:
+                        shutil.copyfileobj(infile, outfile)
+                    
+                    await msg.edit_text(
+                        f"🔄 <b>Combining part {part_num}/{len(parts_data)}...</b>\n"
+                        f"<i>Processing {base_name}</i>",
+                        parse_mode='HTML'
+                    )
+        
+        # Procesar archivo combinado
+        file_size = os.path.getsize(combined_file)
+        
+        await msg.edit_text(
+            f"✅ <b>FILE COMBINED SUCCESSFULLY!</b>\n\n"
+            f"<b>File:</b> {base_name}\n"
+            f"<b>Total parts:</b> {len(parts_data)}\n"
+            f"<b>Final size:</b> {file_size/(1024*1024):.2f} MB\n"
+            f"<b>Status:</b> Processing combined file...",
+            parse_mode='HTML'
+        )
+        
+        # Procesar archivo combinado
+        await self._process_upload_background(combined_file, f"{base_name}_combined.txt", user_id, msg)
+        
+        # Limpiar partes temporales
+        try:
+            shutil.rmtree(upload_dir)
+        except:
+            pass
+        
+    except Exception as e:
+        await msg.edit_text(f"❌ <b>Error combining parts:</b> {str(e)[:200]}", parse_mode='HTML')
+
+# Añade también este comando de ayuda
+async def split_help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mostrar ayuda para dividir archivos"""
+    user_id = update.effective_user.id
+    
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Admins only.")
+        return
+    
+    help_text = """
+📦 <b>HOW TO UPLOAD LARGE FILES (>20MB)</b>
+
+🔧 <b>METHOD 1: Using 7zip (RECOMMENDED)</b>
+<code>7z a -v20m database.7z your_file.txt</code>
+• Creates: database.7z.001, database.7z.002, etc.
+• Send each .00X file to bot
+
+🔧 <b>METHOD 2: Using HJSplit (Windows)</b>
+1. Download HJSplit: http://www.hjsplit.org/
+2. Split file into 20MB parts
+3. Send .001, .002, etc. to bot
+
+🔧 <b>METHOD 3: Using split command (Linux/Mac)</b>
+<code>split -b 20m large_file.txt large_file.part</code>
+• Creates: large_file.partaa, large_file.partab, etc.
+
+📝 <b>STEPS:</b>
+1. Split your file into 20MB parts
+2. Send parts one by one to bot
+3. When finished: <code>/finishupload filename</code>
+
+⚡ <b>BOT WILL:</b>
+• Auto-detect part numbers
+• Combine all parts
+• Process as normal file
+• Add to search database
+
+💡 <b>TIP:</b> For 38MB file → 2 parts (20MB + 18MB)
+"""
+    
+    await update.message.reply_text(help_text, parse_mode='HTML')
+    
+def __init__(self, search_engine: SearchEngine, credit_system: CreditSystem):
         self.search_engine = search_engine
         self.credit_system = credit_system
         self.file_processor = LargeFileProcessor()
@@ -2092,6 +2343,10 @@ def main():
     application.add_handler(CommandHandler("login", bot.login_command))
     application.add_handler(CommandHandler("pass", bot.pass_command))
     application.add_handler(CommandHandler("dni", bot.dni_command))
+    application.add_handler(CommandHandler("uploadlarge", bot.upload_large_system))
+    application.add_handler(CommandHandler("finishupload", bot.finish_upload_command))
+    application.add_handler(CommandHandler("splithelp", bot.split_help_command))
+    application.add_handler(MessageHandler(filters.Document.ALL, bot.handle_file_part))
     
     # Admin commands
     application.add_handler(CommandHandler("addcredits", bot.addcredits_command))
