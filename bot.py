@@ -932,7 +932,7 @@ class ULPBot:
             return ConversationHandler.END
         
         if not self.credit_system.use_credits(user_id, "domain", domain, total_found):
-            await query.edit_message_text("<b>❌ Error using credits</b>", parse_mode='HTML")
+            await query.edit_message_text("<b>❌ Error using credits</b>", parse_mode='HTML')
             del self.pending_searches[user_id]
             return ConversationHandler.END
         
