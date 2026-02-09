@@ -1,6 +1,6 @@
 """
 🔍 ULP Searcher Bot - COMPLETE ENGLISH VERSION
-With Large File Upload (up to 5GB) - Owner: @ibericowner
+With Large File Upload (NO SIZE LIMITS) - Owner: @ibericowner
 """
 
 import os
@@ -31,24 +31,23 @@ from telegram.ext import (
 )
 
 # ============================================================================
-# CONFIGURATION
+# CONFIGURATION - NO SIZE LIMITS
 # ============================================================================
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 ADMIN_IDS = [int(id.strip()) for id in os.getenv('ADMIN_IDS', '').split(',') if id.strip()]
 BOT_OWNER = "@ibericowner"
 BOT_NAME = "🔍 ULP Searcher Bot"
-BOT_VERSION = "8.0 ENGLISH PREMIUM"
-MAX_FREE_CREDITS = 2  # Changed to 2 free credits as requested
-RESET_HOUR = 0  # Midnight reset
+BOT_VERSION = "8.0 NO LIMITS"
+MAX_FREE_CREDITS = 2
+RESET_HOUR = 0
 
 # Referral system
-REFERRAL_BONUS = 1  # +1 credit per referral
+REFERRAL_BONUS = 1
 
-# Large file configuration
-MAX_UPLOAD_SIZE = 5 * 1024 * 1024 * 1024  # 5GB for Premium accounts
-CHUNK_SIZE = 100 * 1024 * 1024  # 100MB per chunk
-PROCESSING_TIMEOUT = 7200  # 2 hours max
+# ⚠️ NO SIZE LIMITS - Telegram will reject if too big
+MAX_UPLOAD_SIZE = 100 * 1024 * 1024 * 1024  # 100GB (basically ignore)
+CHUNK_SIZE = 100 * 1024 * 1024
 ALLOWED_EXTENSIONS = ['.txt', '.zip', '.7z', '.rar', '.gz', '.tar']
 COMPRESSED_EXTENSIONS = ['.zip', '.7z', '.rar', '.gz', '.tar']
 
@@ -62,13 +61,11 @@ PROCESSING_DIR = os.path.join(BASE_DIR, "processing")
 CACHE_DIR = os.path.join(BASE_DIR, "cache")
 DB_PATH = os.path.join(BASE_DIR, "bot.db")
 
-# Create all necessary directories
 for directory in [BASE_DIR, DATA_DIR, UPLOAD_DIR, UPLOAD_TEMP_DIR, PROCESSING_DIR, CACHE_DIR]:
     os.makedirs(directory, exist_ok=True)
 
 CHOOSING_FORMAT = 0
 
-# Executors for parallel processing
 thread_executor = ThreadPoolExecutor(max_workers=4)
 process_executor = ProcessPoolExecutor(max_workers=2)
 
@@ -105,11 +102,9 @@ def health():
 # ============================================================================
 
 def init_database():
-    """Initialize all database tables"""
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         
-        # Users table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -126,7 +121,6 @@ def init_database():
             )
         ''')
         
-        # Transactions table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,7 +132,6 @@ def init_database():
             )
         ''')
         
-        # Referrals table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS referrals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -149,7 +142,6 @@ def init_database():
             )
         ''')
         
-        # Uploaded files table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS uploaded_files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -165,7 +157,6 @@ def init_database():
             )
         ''')
         
-        # Broadcast messages table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS broadcasts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -307,10 +298,6 @@ class SearchEngine:
         return len(results), results
     
     def search_dni_in_domain(self, domain: str, max_results: int = 10000) -> Tuple[int, List[str]]:
-        """
-        Search for Spanish DNI combos (DNI:password) in a specific domain
-        Format: 12345678A:password@domain.com
-        """
         results = []
         domain_lower = domain.lower()
         
@@ -325,12 +312,9 @@ class SearchEngine:
                         if not line:
                             continue
                         
-                        # Check if line contains the domain
                         if domain_lower in line.lower():
-                            # Check for DNI pattern (8 digits + optional letter)
                             dni_pattern = r'\b\d{7,8}[A-Z]?\b'
                             if re.search(dni_pattern, line):
-                                # Check if it's a combo (contains :)
                                 if ':' in line:
                                     results.append(line)
                         
@@ -359,7 +343,6 @@ class SearchEngine:
     
     def add_data_file(self, file_path: str) -> Tuple[bool, str]:
         try:
-            # Generate unique filename
             timestamp = int(time.time())
             filename = os.path.basename(file_path)
             unique_filename = f"{timestamp}_{filename}"
@@ -372,7 +355,7 @@ class SearchEngine:
             return False, str(e)
 
 # ============================================================================
-# CREDIT SYSTEM WITH DAILY RESET AND REFERRALS
+# CREDIT SYSTEM WITH AUTO-CREATE USERS
 # ============================================================================
 
 class CreditSystem:
@@ -386,12 +369,7 @@ class CreditSystem:
         return conn
     
     def init_database(self):
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Create tables if not exist (already done in init_database())
-            # This is just for backward compatibility
-            pass
+        pass
     
     def generate_referral_code(self, user_id: int) -> str:
         code = f"REF{user_id}{random.randint(1000, 9999)}"
@@ -408,7 +386,6 @@ class CreditSystem:
                 self.check_daily_reset(user_id)
                 return dict(user)
             
-            # New user - give 2 free credits as requested
             referral_code = self.generate_referral_code(user_id)
             
             cursor.execute('''
@@ -422,7 +399,6 @@ class CreditSystem:
                 VALUES (?, ?, ?, ?)
             ''', (user_id, 2, 'daily_reset', '2 daily initial credits'))
             
-            # Handle referral bonus
             if referred_by:
                 cursor.execute('''
                     INSERT INTO referrals (referrer_id, referred_id)
@@ -462,7 +438,6 @@ class CreditSystem:
             }
     
     def check_daily_reset(self, user_id: int):
-        """Reset daily credits at midnight (RESET_HOUR)"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
@@ -476,17 +451,15 @@ class CreditSystem:
                 last_reset_str = result['last_reset']
                 today = datetime.now().date()
                 
-                # Parse last_reset string to date
                 try:
                     last_reset = datetime.strptime(last_reset_str, '%Y-%m-%d').date()
                 except:
                     last_reset = today
                 
-                # Check if we need to reset (different day)
                 if last_reset != today:
                     cursor.execute('''
                         UPDATE users 
-                        SET daily_credits = 2,  # Reset to 2 credits
+                        SET daily_credits = 2,
                             last_reset = DATE('now')
                         WHERE user_id = ?
                     ''', (user_id,))
@@ -580,15 +553,27 @@ class CreditSystem:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
-            cursor.execute(
-                'SELECT extra_credits FROM users WHERE user_id = ?',
-                (user_id,)
-            )
+            # AUTO-CREATE USER IF NOT EXISTS
+            cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
             result = cursor.fetchone()
             
             if not result:
-                return False, "User not found"
+                # Create user automatically
+                referral_code = self.generate_referral_code(user_id)
+                cursor.execute('''
+                    INSERT INTO users 
+                    (user_id, daily_credits, referral_code, last_reset)
+                    VALUES (?, 2, ?, DATE('now'))
+                ''', (user_id, referral_code))
+                
+                cursor.execute('''
+                    INSERT INTO transactions (user_id, amount, type, description)
+                    VALUES (?, ?, ?, ?)
+                ''', (user_id, 2, 'daily_reset', 'Auto-created by admin'))
+                
+                conn.commit()
             
+            # Now add credits
             if credit_type == 'extra':
                 cursor.execute(
                     'UPDATE users SET extra_credits = extra_credits + ? WHERE user_id = ?',
@@ -682,7 +667,6 @@ class LargeFileProcessor:
         self.processing_tasks = {}
     
     def calculate_file_hash(self, file_path: str) -> str:
-        """Calculate SHA-256 hash for duplicate checking"""
         sha256_hash = hashlib.sha256()
         with open(file_path, "rb") as f:
             for byte_block in iter(lambda: f.read(4096), b""):
@@ -690,7 +674,6 @@ class LargeFileProcessor:
         return sha256_hash.hexdigest()
     
     def process_large_txt_file(self, file_path: str, output_dir: str) -> dict:
-        """Process large text files (1GB-5GB)"""
         stats = {
             'lines_processed': 0,
             'valid_lines': 0,
@@ -705,8 +688,7 @@ class LargeFileProcessor:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as infile, \
                  open(output_file, 'w', encoding='utf-8') as outfile:
                 
-                # Process in chunks to avoid memory issues
-                chunk_size = 100000  # Process 100k lines at a time
+                chunk_size = 100000
                 chunk = []
                 
                 for line in infile:
@@ -717,7 +699,6 @@ class LargeFileProcessor:
                     chunk.append(line)
                     stats['lines_processed'] += 1
                     
-                    # Process chunk when it reaches chunk_size
                     if len(chunk) >= chunk_size:
                         for chunk_line in chunk:
                             if ':' in chunk_line and len(chunk_line) > 3:
@@ -725,7 +706,6 @@ class LargeFileProcessor:
                                 stats['valid_lines'] += 1
                         chunk = []
                 
-                # Process remaining lines
                 for chunk_line in chunk:
                     if ':' in chunk_line and len(chunk_line) > 3:
                         outfile.write(chunk_line + '\n')
@@ -742,11 +722,9 @@ class LargeFileProcessor:
             return stats
     
     def process_compressed_file(self, file_path: str, output_dir: str) -> str:
-        """Process compressed files (ZIP, RAR, etc.)"""
         import zipfile
         import tarfile
         import gzip
-        import patoolib
         
         file_ext = os.path.splitext(file_path)[1].lower()
         extracted_dir = os.path.join(output_dir, "extracted")
@@ -764,14 +742,9 @@ class LargeFileProcessor:
                     with open(os.path.join(extracted_dir, "extracted.txt"), 'wb') as out_ref:
                         out_ref.write(gz_ref.read())
             else:
-                # Try patoolib for other formats (RAR, 7z, etc.)
-                try:
-                    patoolib.extract_archive(file_path, outdir=extracted_dir)
-                except:
-                    logger.error(f"Unsupported compressed format: {file_ext}")
-                    return None
+                logger.error(f"Unsupported compressed format: {file_ext}")
+                return None
             
-            # Find and combine all .txt files
             txt_files = []
             for root, dirs, files in os.walk(extracted_dir):
                 for file in files:
@@ -779,7 +752,6 @@ class LargeFileProcessor:
                         txt_files.append(os.path.join(root, file))
             
             if txt_files:
-                # Combine all .txt files into one
                 combined_file = os.path.join(output_dir, "combined.txt")
                 with open(combined_file, 'w', encoding='utf-8') as outfile:
                     for txt_file in txt_files:
@@ -960,7 +932,7 @@ class ULPBot:
             return ConversationHandler.END
         
         if not self.credit_system.use_credits(user_id, "domain", domain, total_found):
-            await query.edit_message_text("<b>❌ Error using credits</b>", parse_mode='HTML')
+            await query.edit_message_text("<b>❌ Error using credits</b>", parse_mode='HTML")
             del self.pending_searches[user_id]
             return ConversationHandler.END
         
@@ -1241,7 +1213,6 @@ class ULPBot:
         total_credits = self.credit_system.get_user_credits(user_id)
         daily_credits = self.credit_system.get_daily_credits_left(user_id)
         
-        # Send as file if more than 100 results
         if total_found > 100:
             txt_buffer = io.BytesIO()
             content = "\n".join(results)
@@ -1273,7 +1244,6 @@ class ULPBot:
                 parse_mode='HTML'
             )
         else:
-            # Show results in message
             response = (
                 f"<b>✅ DNI COMBOS FOUND</b>\n\n"
                 f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
@@ -1661,7 +1631,6 @@ class ULPBot:
         bot_stats = self.credit_system.get_bot_stats()
         engine_stats = self.search_engine.get_stats()
         
-        # Count total lines in database
         total_lines = 0
         for file_path in glob.glob(os.path.join(DATA_DIR, "*.txt")):
             try:
@@ -1729,7 +1698,6 @@ class ULPBot:
         message = " ".join(context.args)
         msg = await update.message.reply_text("📢 <b>Starting broadcast...</b>", parse_mode='HTML')
         
-        # Get all users
         users = self.credit_system.get_all_users(limit=1000)
         total_users = len(users)
         successful = 0
@@ -1737,7 +1705,6 @@ class ULPBot:
         
         await msg.edit_text(f"📢 <b>Broadcasting to {total_users} users...</b>", parse_mode='HTML')
         
-        # Send to each user
         for user in users:
             try:
                 await context.bot.send_message(
@@ -1750,7 +1717,6 @@ class ULPBot:
                 failed += 1
                 logger.error(f"Failed to send to {user['user_id']}: {e}")
             
-            # Update progress every 10 users
             if (successful + failed) % 10 == 0:
                 await msg.edit_text(
                     f"📢 <b>Broadcast Progress:</b>\n"
@@ -1760,7 +1726,6 @@ class ULPBot:
                     parse_mode='HTML'
                 )
         
-        # Save broadcast to database
         with sqlite3.connect(DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -1780,28 +1745,21 @@ class ULPBot:
         )
     
     async def handle_large_file_upload(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle file uploads - NO SIZE CHECK VERSION"""
         user_id = update.effective_user.id
         
         if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Admins only can upload files.")
+            await update.message.reply_text("❌ Admins only.")
             return
         
         if not update.message.document:
             await update.message.reply_text(
-                "<b>📤 UPLOAD LARGE FILES (up to 5GB)</b>\n\n"
+                "<b>📤 UPLOAD FILES (NO SIZE LIMIT)</b>\n\n"
+                "<b>⚠️ WARNING:</b> Telegram may reject very large files\n\n"
                 "<b>Supported formats:</b>\n"
-                "• .txt (plain text with credentials)\n"
-                "• .zip (compressed .txt files)\n"
-                "• .rar, .7z, .gz, .tar\n\n"
-                "<b>Formats accepted:</b>\n"
-                "• email:password\n"
-                "• url:email:password\n"
-                "• login:password\n\n"
-                "<b>⚠️ Important:</b>\n"
-                "• Files up to 5GB supported (Premium accounts)\n"
-                "• Processing may take time\n"
-                "• Duplicates are automatically removed\n\n"
-                "<i>Send me a file to upload...</i>",
+                "• .txt (text files)\n"
+                "• .zip, .7z, .rar (compressed)\n\n"
+                "<i>Send file directly to upload...</i>",
                 parse_mode='HTML'
             )
             return
@@ -1811,31 +1769,25 @@ class ULPBot:
         
         if file_ext not in ALLOWED_EXTENSIONS:
             await update.message.reply_text(
-                f"❌ Unsupported file format: {file_ext}\n"
-                f"Supported: {', '.join(ALLOWED_EXTENSIONS)}"
+                f"❌ Unsupported format: {file_ext}\n"
+                f"✅ Supported: .txt, .zip, .7z, .rar, .gz, .tar"
             )
             return
         
-        # Check file size
-        if document.file_size > MAX_UPLOAD_SIZE:
-            await update.message.reply_text(
-                f"❌ File too large: {document.file_size/(1024**3):.2f}GB\n"
-                f"Maximum: {MAX_UPLOAD_SIZE/(1024**3):.2f}GB"
-            )
-            return
-        
-        # Create status message
+        # NO SIZE CHECK - Telegram will fail if too big
         status_msg = await update.message.reply_text(
-            f"📥 <b>DOWNLOADING FILE...</b>\n\n"
+            f"📥 <b>ATTEMPTING UPLOAD...</b>\n\n"
             f"<b>File:</b> <code>{self.escape_html(document.file_name)}</code>\n"
-            f"<b>Size:</b> {document.file_size/(1024**2):.2f} MB\n"
-            f"<b>Type:</b> {file_ext}\n\n"
-            f"<i>Please wait, this may take a while...</i>",
+            f"<b>Type:</b> {file_ext}\n"
+            f"<i>Trying to download from Telegram...</i>",
             parse_mode='HTML'
         )
         
         try:
-            # Create unique temp directory
+            # Try to download - Telegram will fail if file is too big
+            file = await document.get_file()
+            
+            # Create temp directory
             upload_id = f"{user_id}_{int(time.time())}"
             temp_dir = os.path.join(UPLOAD_TEMP_DIR, upload_id)
             os.makedirs(temp_dir, exist_ok=True)
@@ -1843,34 +1795,49 @@ class ULPBot:
             temp_path = os.path.join(temp_dir, document.file_name)
             
             # Download file
-            file = await document.get_file()
             await file.download_to_drive(temp_path)
             
+            actual_size = os.path.getsize(temp_path)
+            
             await status_msg.edit_text(
-                f"✅ <b>DOWNLOAD COMPLETE</b>\n\n"
+                f"✅ <b>DOWNLOAD SUCCESSFUL!</b>\n\n"
                 f"<b>File:</b> <code>{self.escape_html(document.file_name)}</code>\n"
-                f"<b>Size:</b> {os.path.getsize(temp_path)/(1024**2):.2f} MB\n"
+                f"<b>Size:</b> {actual_size/(1024**2):.2f} MB\n"
                 f"<b>Status:</b> Processing file...",
                 parse_mode='HTML'
             )
             
-            # Process file in background
+            # Process file
             await self._process_upload_background(temp_path, document.file_name, user_id, status_msg)
             
         except Exception as e:
-            logger.error(f"Upload error: {e}")
-            await status_msg.edit_text(
-                f"❌ <b>UPLOAD FAILED</b>\n\n"
-                f"<b>Error:</b> {str(e)[:200]}",
-                parse_mode='HTML'
-            )
+            error_msg = str(e)
+            
+            # Check if it's a size error from Telegram
+            if "too big" in error_msg.lower() or "400" in error_msg or "413" in error_msg:
+                await status_msg.edit_text(
+                    f"❌ <b>TELEGRAM REJECTED FILE</b>\n\n"
+                    f"<b>File:</b> <code>{self.escape_html(document.file_name)}</code>\n"
+                    f"<b>Reason:</b> File too large for Telegram API\n\n"
+                    f"<b>🔧 SOLUTIONS:</b>\n"
+                    f"1. <b>Compress with 7zip</b> (38MB → ~4MB)\n"
+                    f"2. <b>Split file</b> into smaller parts\n"
+                    f"3. <b>Use .7z format</b> for better compression\n\n"
+                    f"<i>Even if we ignore size check, Telegram API has limits!</i>",
+                    parse_mode='HTML'
+                )
+            else:
+                await status_msg.edit_text(
+                    f"❌ <b>UPLOAD FAILED</b>\n\n"
+                    f"<b>Error:</b> {error_msg[:200]}",
+                    parse_mode='HTML'
+                )
     
     async def _process_upload_background(self, file_path: str, filename: str, user_id: int, status_msg):
         """Process uploaded file in background"""
         
         def process_file():
             try:
-                # Create processing directory
                 process_id = f"proc_{int(time.time())}"
                 process_dir = os.path.join(PROCESSING_DIR, process_id)
                 os.makedirs(process_dir, exist_ok=True)
@@ -1888,28 +1855,23 @@ class ULPBot:
                 file_ext = os.path.splitext(file_path)[1].lower()
                 
                 if file_ext in COMPRESSED_EXTENSIONS:
-                    # Process compressed file
                     extracted_file = self.file_processor.process_compressed_file(file_path, process_dir)
                     if extracted_file:
-                        # Process extracted file
                         stats = self.file_processor.process_large_txt_file(extracted_file, process_dir)
                         result.update(stats)
                         result['output_file'] = stats['output_file']
                     else:
                         raise Exception("Failed to extract compressed file")
                 else:
-                    # Process text file directly
                     stats = self.file_processor.process_large_txt_file(file_path, process_dir)
                     result.update(stats)
                     result['output_file'] = stats['output_file']
                 
-                # Move to database if processing successful
                 if result['output_file'] and os.path.exists(result['output_file']):
                     final_filename = f"db_{int(time.time())}_{filename}"
                     final_path = os.path.join(DATA_DIR, final_filename)
                     shutil.move(result['output_file'], final_path)
                     
-                    # Add to search engine
                     success, message = self.search_engine.add_data_file(final_path)
                     if not success:
                         raise Exception(f"Failed to add to search engine: {message}")
@@ -1923,7 +1885,6 @@ class ULPBot:
                 logger.error(f"Background processing error: {e}")
                 return {'error': str(e)}
             finally:
-                # Cleanup temp files
                 try:
                     temp_dir = os.path.dirname(file_path)
                     if os.path.exists(temp_dir):
@@ -1931,11 +1892,9 @@ class ULPBot:
                 except:
                     pass
         
-        # Run in thread pool
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(thread_executor, process_file)
         
-        # Show results
         if 'error' in result:
             await status_msg.edit_text(
                 f"❌ <b>PROCESSING FAILED</b>\n\n"
@@ -1969,32 +1928,23 @@ class ULPBot:
         stats = self.search_engine.get_stats()
         
         response = (
-            f"<b>📤 FILE UPLOAD SYSTEM</b>\n\n"
+            f"<b>📤 FILE UPLOAD SYSTEM (NO SIZE LIMITS)</b>\n\n"
             f"<b>📁 Current Database:</b>\n"
             f"• Files: <code>{stats['total_files']}</code>\n"
             f"• Size: <code>{stats['total_size_gb']:.2f}</code> GB\n\n"
             
             f"<b>📦 Supported Formats:</b>\n"
             f"• .txt (plain text)\n"
-            f"• .zip, .rar, .7z (compressed)\n"
-            f"• .gz, .tar (archives)\n\n"
+            f"• .zip, .rar, .7z (compressed)\n\n"
             
-            f"<b>📝 Accepted Formats:</b>\n"
-            f"• email:password\n"
-            f"• url:email:password\n"
-            f"• login:password\n"
-            f"• email only\n\n"
-            
-            f"<b>⚠️ Important:</b>\n"
-            f"• Max file size: 5GB (Premium accounts)\n"
-            f"• Processing may take time for large files\n"
-            f"• Duplicates are automatically removed\n"
-            f"• Files are indexed immediately after upload\n\n"
+            f"<b>⚠️ IMPORTANT:</b>\n"
+            f"• Telegram API may reject files > 20MB\n"
+            f"• Compress large files with 7zip\n"
+            f"• Use .7z format for best compression\n\n"
             
             f"<b>📊 System Status:</b>\n"
         )
         
-        # Check disk space
         try:
             total, used, free = shutil.disk_usage("/")
             response += f"• Free space: <code>{free/(1024**3):.1f}</code> GB\n"
@@ -2005,10 +1955,9 @@ class ULPBot:
         
         response += (
             f"<b>🚀 How to Upload:</b>\n"
-            f"1. Use /upload command\n"
-            f"2. Send the file directly\n"
-            f"3. Wait for processing\n"
-            f"4. File will be available immediately\n\n"
+            f"1. Send file directly to bot\n"
+            f"2. Bot will try to download it\n"
+            f"3. If Telegram rejects it, compress first\n\n"
             
             f"<i>Note: Only admins can upload files</i>"
         )
@@ -2110,20 +2059,16 @@ def main():
     logger.info(f"🚀 Starting {BOT_NAME} v{BOT_VERSION}")
     logger.info(f"👑 Owner: {BOT_OWNER}")
     logger.info(f"💰 Free credits: {MAX_FREE_CREDITS} (resets at {RESET_HOUR}:00)")
-    logger.info(f"📁 Max upload size: {MAX_UPLOAD_SIZE/(1024**3):.1f}GB")
+    logger.info(f"📁 NO SIZE LIMITS - Telegram API may reject large files")
     
-    # Initialize database
     init_database()
     
-    # Create instances
     search_engine = SearchEngine()
     credit_system = CreditSystem()
     bot = ULPBot(search_engine, credit_system)
     
-    # Create application
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
-    # Search conversation handler
     search_conv = ConversationHandler(
         entry_points=[CommandHandler('search', bot.search_command)],
         states={
@@ -2165,12 +2110,10 @@ def main():
     application.add_handler(CallbackQueryHandler(bot.button_handler, pattern='^copy_'))
     application.add_handler(CallbackQueryHandler(bot.button_handler, pattern='^format_'))
     
-    # Start Flask server
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     logger.info(f"🌐 Flask server running on port {PORT}")
     
-    # Start bot
     logger.info("🤖 Bot started and ready")
     application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
