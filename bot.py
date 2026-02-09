@@ -1,6 +1,7 @@
 """
 🔍 ULP Searcher Bot - COMPLETE ENGLISH VERSION
-With Referral System - Owner: @iberic_owner
+With ALL Commands + Broadcast + Referral System
+Owner: @iberic_owner
 """
 
 import os
@@ -31,12 +32,12 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 ADMIN_IDS = [int(id.strip()) for id in os.getenv('ADMIN_IDS', '').split(',') if id.strip()]
 BOT_OWNER = "@iberic_owner"
 BOT_NAME = "🔍 ULP Searcher Bot"
-BOT_VERSION = "6.0 ENGLISH REFERRAL"
-MAX_FREE_CREDITS = 3
+BOT_VERSION = "7.0 COMPLETE EN"
+MAX_FREE_CREDITS = 2  # ✅ 2 free credits
 RESET_HOUR = 0
 
 # Referral system
-REFERRAL_BONUS = 1  # +1 credit per referral
+REFERRAL_BONUS = 1  # ✅ +1 credit per referral
 
 PORT = int(os.getenv('PORT', 10000))
 
@@ -48,7 +49,7 @@ DB_PATH = os.path.join(BASE_DIR, "bot.db")
 for directory in [BASE_DIR, DATA_DIR, UPLOAD_DIR]:
     os.makedirs(directory, exist_ok=True)
 
-CHOOSING_FORMAT = 0
+CHOOSING_FORMAT, BROADCAST_MESSAGE = range(2)
 
 # ============================================================================
 # LOGGING
@@ -270,14 +271,15 @@ class CreditSystem:
                     user_id INTEGER PRIMARY KEY,
                     username TEXT,
                     first_name TEXT,
-                    daily_credits INTEGER DEFAULT 3,
+                    daily_credits INTEGER DEFAULT 2,  -- ✅ 2 free credits
                     extra_credits INTEGER DEFAULT 0,
                     total_searches INTEGER DEFAULT 0,
                     referrals_count INTEGER DEFAULT 0,
                     referral_code TEXT UNIQUE,
                     referred_by INTEGER,
                     join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_reset DATE DEFAULT CURRENT_DATE
+                    last_reset DATE DEFAULT CURRENT_DATE,
+                    active BOOLEAN DEFAULT TRUE
                 )
             ''')
             
@@ -311,6 +313,17 @@ class CreditSystem:
                 )
             ''')
             
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS broadcasts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    admin_id INTEGER,
+                    message TEXT,
+                    sent_to INTEGER DEFAULT 0,
+                    failed_to INTEGER DEFAULT 0,
+                    date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
             conn.commit()
     
     def generate_referral_code(self, user_id: int) -> str:
@@ -333,13 +346,13 @@ class CreditSystem:
             cursor.execute('''
                 INSERT INTO users 
                 (user_id, username, first_name, daily_credits, referral_code, referred_by, last_reset)
-                VALUES (?, ?, ?, 3, ?, ?, DATE('now'))
+                VALUES (?, ?, ?, 2, ?, ?, DATE('now'))
             ''', (user_id, username, first_name, referral_code, referred_by))
             
             cursor.execute('''
                 INSERT INTO transactions (user_id, amount, type, description)
                 VALUES (?, ?, ?, ?)
-            ''', (user_id, 3, 'daily_reset', '3 daily initial credits'))
+            ''', (user_id, 2, 'daily_reset', '2 daily initial credits'))
             
             if referred_by:
                 cursor.execute('''
@@ -372,7 +385,7 @@ class CreditSystem:
                 'user_id': user_id,
                 'username': username,
                 'first_name': first_name,
-                'daily_credits': 3,
+                'daily_credits': 2,
                 'extra_credits': 0,
                 'referral_code': referral_code,
                 'referred_by': referred_by,
@@ -396,7 +409,7 @@ class CreditSystem:
                 if last_reset != str(today):
                     cursor.execute('''
                         UPDATE users 
-                        SET daily_credits = 3,
+                        SET daily_credits = 2,
                             last_reset = DATE('now')
                         WHERE user_id = ?
                     ''', (user_id,))
@@ -404,7 +417,7 @@ class CreditSystem:
                     cursor.execute('''
                         INSERT INTO transactions (user_id, amount, type, description)
                         VALUES (?, ?, ?, ?)
-                    ''', (user_id, 3, 'daily_reset', 'Daily reset to 3 credits'))
+                    ''', (user_id, 2, 'daily_reset', 'Daily reset to 2 credits'))
                     
                     conn.commit()
     
@@ -561,15 +574,31 @@ class CreditSystem:
     def get_all_users(self, limit: int = 50):
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT * FROM users ORDER BY join_date DESC LIMIT ?', (limit,))
+            cursor.execute('SELECT * FROM users WHERE active = TRUE ORDER BY join_date DESC LIMIT ?', (limit,))
             return [dict(row) for row in cursor.fetchall()]
+    
+    def get_all_users_for_broadcast(self):
+        """Get all user IDs for broadcasting"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT user_id FROM users WHERE active = TRUE')
+            return [row['user_id'] for row in cursor.fetchall()]
+    
+    def save_broadcast(self, admin_id: int, message: str, sent_to: int, failed_to: int):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO broadcasts (admin_id, message, sent_to, failed_to)
+                VALUES (?, ?, ?, ?)
+            ''', (admin_id, message, sent_to, failed_to))
+            conn.commit()
     
     def get_bot_stats(self):
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
             stats = {}
-            cursor.execute('SELECT COUNT(*) as count FROM users')
+            cursor.execute('SELECT COUNT(*) as count FROM users WHERE active = TRUE')
             stats['total_users'] = cursor.fetchone()['count']
             
             cursor.execute('SELECT COUNT(*) as count FROM transactions WHERE type = "search_used"')
@@ -580,6 +609,9 @@ class CreditSystem:
             
             cursor.execute('SELECT SUM(referrals_count) as total FROM users')
             stats['total_referrals'] = cursor.fetchone()['total'] or 0
+            
+            cursor.execute('SELECT COUNT(*) as count FROM broadcasts')
+            stats['total_broadcasts'] = cursor.fetchone()['count']
             
             return stats
 
@@ -748,42 +780,16 @@ class ULPBot:
         total_credits = self.credit_system.get_user_credits(user_id)
         daily_credits = self.credit_system.get_daily_credits_left(user_id)
         
-        if total_found > 100:
+        # ✅ ENTREGA DE RESULTADOS SEGÚN CANTIDAD
+        if total_found < 100:
+            await self.send_results_as_message(query, results, domain, total_found, daily_credits, total_credits)
+        elif total_found <= 10000:
             await self.send_results_as_txt(query, results, domain, total_found, daily_credits, total_credits)
         else:
-            await self.send_results_as_message(query, results, domain, total_found, daily_credits, total_credits)
+            await self.send_results_as_zip(query, results, domain, total_found, daily_credits, total_credits)
         
         del self.pending_searches[user_id]
         return ConversationHandler.END
-    
-    async def send_results_as_txt(self, query_callback, results: list, domain: str, total_found: int, daily_credits: int, total_credits: int):
-        txt_buffer = io.BytesIO()
-        content = "\n".join(results)
-        txt_buffer.write(content.encode('utf-8'))
-        txt_buffer.seek(0)
-        
-        await query_callback.message.reply_document(
-            document=txt_buffer,
-            filename=f"ulp_{domain}.txt",
-            caption=(
-                f"<b>📁 RESULTS</b>\n\n"
-                f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
-                f"<b>Results:</b> <code>{total_found}</code>\n"
-                f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-                f"<b>Total credits:</b> <code>{total_credits}</code>"
-            ),
-            parse_mode='HTML'
-        )
-        
-        await query_callback.edit_message_text(
-            f"<b>✅ SEARCH COMPLETED</b>\n\n"
-            f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
-            f"<b>Results:</b> <code>{total_found}</code>\n"
-            f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-            f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-            f"<i>Results sent as file</i>",
-            parse_mode='HTML'
-        )
     
     async def send_results_as_message(self, query_callback, results: list, domain: str, total_found: int, daily_credits: int, total_credits: int):
         response = (
@@ -807,6 +813,75 @@ class ULPBot:
             response += f"\n<b>... and {total_found-10} more results</b>"
         
         await query_callback.edit_message_text(response, parse_mode='HTML')
+    
+    async def send_results_as_txt(self, query_callback, results: list, domain: str, total_found: int, daily_credits: int, total_credits: int):
+        txt_buffer = io.BytesIO()
+        content = "\n".join(results)
+        txt_buffer.write(content.encode('utf-8'))
+        txt_buffer.seek(0)
+        
+        await query_callback.message.reply_document(
+            document=txt_buffer,
+            filename=f"ulp_{domain}_{total_found}.txt",
+            caption=(
+                f"<b>📁 RESULTS (TXT FILE)</b>\n\n"
+                f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
+                f"<b>Results:</b> <code>{total_found}</code>\n"
+                f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
+                f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
+                f"<i>Results: 100-10,000 → .txt file</i>"
+            ),
+            parse_mode='HTML'
+        )
+        
+        await query_callback.edit_message_text(
+            f"<b>✅ SEARCH COMPLETED</b>\n\n"
+            f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
+            f"<b>Results:</b> <code>{total_found}</code>\n"
+            f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
+            f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
+            f"<i>Results sent as .txt file</i>",
+            parse_mode='HTML'
+        )
+    
+    async def send_results_as_zip(self, query_callback, results: list, domain: str, total_found: int, daily_credits: int, total_credits: int):
+        # Create multiple txt files if results are too many
+        zip_buffer = io.BytesIO()
+        
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            # Split results into chunks of 5000
+            chunk_size = 5000
+            for i in range(0, len(results), chunk_size):
+                chunk = results[i:i + chunk_size]
+                content = "\n".join(chunk)
+                filename = f"ulp_{domain}_part{i//chunk_size + 1}.txt"
+                zip_file.writestr(filename, content)
+        
+        zip_buffer.seek(0)
+        
+        await query_callback.message.reply_document(
+            document=zip_buffer,
+            filename=f"ulp_{domain}_{total_found}.zip",
+            caption=(
+                f"<b>📁 RESULTS (ZIP FILE)</b>\n\n"
+                f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
+                f"<b>Results:</b> <code>{total_found}</code>\n"
+                f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
+                f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
+                f"<i>Results: >10,000 → .zip file</i>"
+            ),
+            parse_mode='HTML'
+        )
+        
+        await query_callback.edit_message_text(
+            f"<b>✅ SEARCH COMPLETED</b>\n\n"
+            f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
+            f"<b>Results:</b> <code>{total_found}</code>\n"
+            f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
+            f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
+            f"<i>Results sent as .zip file (multiple files inside)</i>",
+            parse_mode='HTML'
+        )
     
     async def email_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -1172,12 +1247,12 @@ class ULPBot:
             f"  • 100-10,000 → .txt file\n"
             f"  • >10,000 → .zip file\n\n"
             
-            f"<b>🎁 SPECIAL OFFERS:</b>\n"
-            f"• First-time users: {MAX_FREE_CREDITS} credits\n"
-            f"• Active users: Bonus credits\n"
-            f"• Bulk purchases: Discounts\n\n"
+            f"<b>💡 TIPS:</b>\n"
+            f"• Use specific terms for better results\n"
+            f"• Invite friends to earn free credits\n"
+            f"• Contact {BOT_OWNER} for more credits\n\n"
             
-            f"<i>Contact {BOT_OWNER} for custom packages!</i>"
+            f"<i>Bot developed by {BOT_OWNER}</i>"
         )
         
         keyboard = [
@@ -1192,8 +1267,7 @@ class ULPBot:
         response = (
             f"<b>📚 {BOT_NAME} - INFORMATION</b>\n\n"
             f"<b>🚀 VERSION:</b> {BOT_VERSION}\n"
-            f"<b>👑 OWNER:</b> {BOT_OWNER}\n"
-            f"<b>📅 LAUNCHED:</b> 2024\n\n"
+            f"<b>👑 OWNER:</b> {BOT_OWNER}\n\n"
             
             f"<b>🔍 WHAT WE DO:</b>\n"
             f"• Search credentials by domain\n"
@@ -1213,11 +1287,10 @@ class ULPBot:
             f"• login:password\n"
             f"• email only\n\n"
             
-            f"<b>⚙️ TECHNOLOGY:</b>\n"
-            f"• Local search engine\n"
-            f"• Fast indexing\n"
-            f"• Secure database\n"
-            f"• 24/7 availability\n\n"
+            f"<b>📁 RESULTS DELIVERY:</b>\n"
+            f"• <100 results → Message\n"
+            f"• 100-10,000 → .txt file\n"
+            f"• >10,000 → .zip file\n\n"
             
             f"<i>For support contact {BOT_OWNER}</i>"
         )
@@ -1258,8 +1331,10 @@ class ULPBot:
             
             f"<b>👑 ADMIN COMMANDS:</b>\n"
             f"<code>/addcredits</code> - Add credits\n"
+            f"<code>/userinfo</code> - User information\n"
             f"<code>/stats</code> - Statistics\n"
             f"<code>/userslist</code> - List users\n"
+            f"<code>/broadcast</code> - Send to all\n"
             f"<code>/upload</code> - Upload ULP file\n\n"
             
             f"<b>📁 RESULTS DELIVERY:</b>\n"
@@ -1398,6 +1473,7 @@ class ULPBot:
             f"🔍 <b>Total searches:</b> <code>{bot_stats['total_searches']}</code>\n"
             f"💰 <b>Total credits:</b> <code>{bot_stats['total_credits']}</code>\n"
             f"👥 <b>Total referrals:</b> <code>{bot_stats.get('total_referrals', 0)}</code>\n"
+            f"📢 <b>Total broadcasts:</b> <code>{bot_stats.get('total_broadcasts', 0)}</code>\n"
             f"📁 <b>Files in DB:</b> <code>{engine_stats['total_files']}</code>\n"
             f"🔄 <b>Daily reset:</b> {RESET_HOUR}:00\n\n"
             f"🤖 <b>Version:</b> {BOT_VERSION}\n"
@@ -1429,6 +1505,94 @@ class ULPBot:
             response += f"{i}. {self.escape_html(username)} (<code>{user['user_id']}</code>) - 🆓{daily} 💎{extra} 🔍{searches}\n"
         
         await update.message.reply_text(response, parse_mode='HTML')
+    
+    async def broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        
+        if user_id not in ADMIN_IDS:
+            await update.message.reply_text("❌ Admins only.")
+            return
+        
+        await update.message.reply_text(
+            "📢 <b>BROADCAST MESSAGE</b>\n\n"
+            "Send the message you want to broadcast to all users.\n"
+            "You can use HTML formatting.\n\n"
+            "Type /cancel to cancel.",
+            parse_mode='HTML'
+        )
+        
+        return BROADCAST_MESSAGE
+    
+    async def broadcast_message_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        
+        if user_id not in ADMIN_IDS:
+            await update.message.reply_text("❌ Admins only.")
+            return ConversationHandler.END
+        
+        message_text = update.message.text
+        users = self.credit_system.get_all_users_for_broadcast()
+        total_users = len(users)
+        
+        if total_users == 0:
+            await update.message.reply_text("❌ No users to broadcast to.")
+            return ConversationHandler.END
+        
+        msg = await update.message.reply_text(
+            f"📢 <b>STARTING BROADCAST</b>\n\n"
+            f"<b>Message:</b> {message_text[:100]}...\n"
+            f"<b>To users:</b> <code>{total_users}</code>\n\n"
+            f"🔄 <i>Sending...</i>",
+            parse_mode='HTML'
+        )
+        
+        sent_count = 0
+        failed_count = 0
+        
+        for user in users:
+            try:
+                await context.bot.send_message(
+                    chat_id=user,
+                    text=message_text,
+                    parse_mode='HTML'
+                )
+                sent_count += 1
+                
+                # Small delay to avoid rate limits
+                if sent_count % 10 == 0:
+                    await msg.edit_text(
+                        f"📢 <b>BROADCAST IN PROGRESS</b>\n\n"
+                        f"✅ <b>Sent:</b> <code>{sent_count}</code>\n"
+                        f"❌ <b>Failed:</b> <code>{failed_count}</code>\n"
+                        f"📊 <b>Total:</b> <code>{total_users}</code>\n\n"
+                        f"🔄 <i>Sending...</i>",
+                        parse_mode='HTML'
+                    )
+                    await asyncio.sleep(0.5)
+                    
+            except Exception as e:
+                failed_count += 1
+                logger.error(f"Failed to send to {user}: {e}")
+        
+        # Save broadcast statistics
+        self.credit_system.save_broadcast(user_id, message_text, sent_count, failed_count)
+        
+        await msg.edit_text(
+            f"📢 <b>BROADCAST COMPLETED</b>\n\n"
+            f"<b>Message sent:</b> {message_text[:100]}...\n\n"
+            f"✅ <b>Successfully sent:</b> <code>{sent_count}</code>\n"
+            f"❌ <b>Failed:</b> <code>{failed_count}</code>\n"
+            f"📊 <b>Total users:</b> <code>{total_users}</code>\n\n"
+            f"📈 <b>Success rate:</b> <code>{round((sent_count/total_users)*100, 2)}%</code>\n\n"
+            f"✅ <i>Broadcast saved to database</i>",
+            parse_mode='HTML'
+        )
+        
+        return ConversationHandler.END
+    
+    async def cancel_broadcast(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.message.reply_text("❌ Broadcast cancelled.")
+        return ConversationHandler.END
     
     async def handle_document(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -1528,6 +1692,7 @@ class ULPBot:
             keyboard = [
                 [InlineKeyboardButton("📊 Statistics", callback_data="admin_stats")],
                 [InlineKeyboardButton("📋 List Users", callback_data="admin_users")],
+                [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast")],
                 [InlineKeyboardButton("📤 Upload File", callback_data="admin_upload")],
             ]
             
@@ -1546,6 +1711,14 @@ class ULPBot:
         elif query.data == "admin_users":
             await self.userslist_command(update, context)
         
+        elif query.data == "admin_broadcast":
+            await update.callback_query.message.reply_text(
+                "📢 <b>BROADCAST</b>\n\n"
+                "Use the command: <code>/broadcast</code>\n\n"
+                "Then type the message you want to send to all users.",
+                parse_mode='HTML'
+            )
+        
         elif query.data == "admin_upload":
             await query.edit_message_text(
                 "<b>📤 UPLOAD FILE</b>\n\n"
@@ -1560,6 +1733,8 @@ class ULPBot:
 # ============================================================================
 # MAIN EXECUTION
 # ============================================================================
+
+import asyncio
 
 def run_flask():
     app.run(host='0.0.0.0', port=PORT, threaded=True)
@@ -1584,6 +1759,17 @@ def main():
         fallbacks=[CommandHandler('cancel', lambda u, c: ConversationHandler.END)]
     )
     
+    # Broadcast handlers
+    broadcast_conv = ConversationHandler(
+        entry_points=[CommandHandler('broadcast', bot.broadcast_command)],
+        states={
+            BROADCAST_MESSAGE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, bot.broadcast_message_handler)
+            ]
+        },
+        fallbacks=[CommandHandler('cancel', bot.cancel_broadcast)]
+    )
+    
     # Basic commands
     application.add_handler(CommandHandler("start", bot.start))
     application.add_handler(CommandHandler("help", bot.help_command))
@@ -1603,6 +1789,7 @@ def main():
     application.add_handler(CommandHandler("userinfo", bot.userinfo_command))
     application.add_handler(CommandHandler("stats", bot.stats_command))
     application.add_handler(CommandHandler("userslist", bot.userslist_command))
+    application.add_handler(broadcast_conv)  # ✅ BROADCAST ADDED
     application.add_handler(MessageHandler(filters.Document.ALL, bot.handle_document))
     
     # Button handlers
