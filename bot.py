@@ -1,6 +1,6 @@
 """
-🔍 ULP Searcher Bot - COMPLETE ENGLISH VERSION
-With Large File Upload (NO SIZE LIMITS) - Owner: @ibericowner
+ULP Searcher Bot - FIXED VERSION
+Corrección: Sin límite de líneas + Email:Pass sin URLs
 """
 
 import os
@@ -9,66 +9,44 @@ import sqlite3
 import threading
 import io
 import zipfile
-import random
-import asyncio
-import hashlib
-import shutil
-import time
-import tempfile
-import glob
 import re
-import json
-from datetime import datetime, time as dt_time, timedelta
+import uuid
+import asyncio
+from datetime import datetime, time
 from typing import Dict, List, Optional, Tuple
-from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
+import glob
 
 from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, 
     ContextTypes, CallbackQueryHandler, filters,
-    ConversationHandler, JobQueue
+    JobQueue
 )
 
 # ============================================================================
-# CONFIGURATION - NO SIZE LIMITS
+# CONFIGURATION
 # ============================================================================
 
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 ADMIN_IDS = [int(id.strip()) for id in os.getenv('ADMIN_IDS', '').split(',') if id.strip()]
-BOT_OWNER = "@ibericowner"
+BOT_OWNER = "@iberic_owner"
+BOT_SUPPORT = "@iberic_owner"
 BOT_NAME = "🔍 ULP Searcher Bot"
-BOT_VERSION = "8.0 NO LIMITS"
+BOT_VERSION = "10.1 FIXED"
 MAX_FREE_CREDITS = 2
+REFERRAL_CREDITS = 1
 RESET_HOUR = 0
-
-# Referral system
-REFERRAL_BONUS = 1
-
-# ⚠️ NO SIZE LIMITS - Telegram will reject if too big
-MAX_UPLOAD_SIZE = 100 * 1024 * 1024 * 1024  # 100GB (basically ignore)
-CHUNK_SIZE = 100 * 1024 * 1024
-ALLOWED_EXTENSIONS = ['.txt', '.zip', '.7z', '.rar', '.gz', '.tar']
-COMPRESSED_EXTENSIONS = ['.zip', '.7z', '.rar', '.gz', '.tar']
 
 PORT = int(os.getenv('PORT', 10000))
 
 BASE_DIR = "bot_data"
 DATA_DIR = os.path.join(BASE_DIR, "ulp_files")
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
-UPLOAD_TEMP_DIR = os.path.join(BASE_DIR, "temp_uploads")
-PROCESSING_DIR = os.path.join(BASE_DIR, "processing")
-CACHE_DIR = os.path.join(BASE_DIR, "cache")
 DB_PATH = os.path.join(BASE_DIR, "bot.db")
 
-for directory in [BASE_DIR, DATA_DIR, UPLOAD_DIR, UPLOAD_TEMP_DIR, PROCESSING_DIR, CACHE_DIR]:
+for directory in [BASE_DIR, DATA_DIR, UPLOAD_DIR]:
     os.makedirs(directory, exist_ok=True)
-
-CHOOSING_FORMAT = 0
-
-thread_executor = ThreadPoolExecutor(max_workers=4)
-process_executor = ProcessPoolExecutor(max_workers=2)
 
 # ============================================================================
 # LOGGING
@@ -84,97 +62,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ============================================================================
-# FLASK APP
-# ============================================================================
-
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return jsonify({"status": "online", "bot": BOT_NAME, "owner": BOT_OWNER})
-
-@app.route('/health')
-def health():
-    return jsonify({"status": "healthy"})
+print("="*60)
+print(f"🚀 Starting {BOT_NAME} v{BOT_VERSION}")
+print(f"👑 Owner: {BOT_OWNER}")
+print(f"💰 Free credits: {MAX_FREE_CREDITS} (resets at {RESET_HOUR}:00)")
+print(f"📁 ALL RESULTS - NO LIMIT + Clean Email:Pass")
+print("="*60)
 
 # ============================================================================
-# DATABASE INITIALIZATION
-# ============================================================================
-
-def init_database():
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                first_name TEXT,
-                daily_credits INTEGER DEFAULT 2,
-                extra_credits INTEGER DEFAULT 0,
-                total_searches INTEGER DEFAULT 0,
-                referrals_count INTEGER DEFAULT 0,
-                referral_code TEXT UNIQUE,
-                referred_by INTEGER,
-                join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_reset DATE DEFAULT CURRENT_DATE
-            )
-        ''')
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS transactions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                amount INTEGER,
-                type TEXT,
-                description TEXT,
-                date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS referrals (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                referrer_id INTEGER,
-                referred_id INTEGER,
-                bonus_credited BOOLEAN DEFAULT FALSE,
-                date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS uploaded_files (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                filename TEXT,
-                file_hash TEXT UNIQUE,
-                file_size INTEGER,
-                upload_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                processed BOOLEAN DEFAULT FALSE,
-                lines_count INTEGER DEFAULT 0,
-                processing_time INTEGER,
-                uploaded_by INTEGER,
-                status TEXT DEFAULT 'pending'
-            )
-        ''')
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS broadcasts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                admin_id INTEGER,
-                message TEXT,
-                sent_to INTEGER DEFAULT 0,
-                failed_to INTEGER DEFAULT 0,
-                sent_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        conn.commit()
-    
-    logger.info("✅ Database initialized")
-
-# ============================================================================
-# SEARCH ENGINE WITH DNI DOMAIN SEARCH
+# SEARCH ENGINE - FIXED: NO LIMITS + CLEAN FORMAT
 # ============================================================================
 
 class SearchEngine:
@@ -187,14 +83,12 @@ class SearchEngine:
         self.data_files = glob.glob(os.path.join(self.data_dir, "*.txt"))
         logger.info(f"📂 Loaded {len(self.data_files)} files")
     
-    def search_domain(self, domain: str, max_results: int = 10000) -> Tuple[int, List[str]]:
+    def search_all_formats(self, query: str) -> Tuple[int, List[str]]:
+        """Search for query - returns ALL lines (NO LIMIT)"""
         results = []
-        domain_lower = domain.lower()
+        query_lower = query.lower()
         
         for file_path in self.data_files:
-            if len(results) >= max_results:
-                break
-            
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     for line in f:
@@ -202,26 +96,27 @@ class SearchEngine:
                         if not line:
                             continue
                         
-                        if domain_lower in line.lower():
+                        if query_lower in line.lower():
                             results.append(line)
-                        
-                        if len(results) >= max_results:
-                            break
-            
             except Exception as e:
                 logger.error(f"Error in {file_path}: {e}")
                 continue
         
+        logger.info(f"🔍 Found {len(results):,} total results for '{query}'")
         return len(results), results
     
-    def search_email(self, email: str, max_results: int = 5000) -> Tuple[int, List[str]]:
+    def search_clean_email_pass_no_url(self, query: str) -> Tuple[int, List[str]]:
+        """
+        Search for query and return CLEAN email:pass format ONLY
+        REMOVES ALL URLs completely - FIXED VERSION
+        """
         results = []
-        email_lower = email.lower()
+        search_term = query.lower().strip()
+        
+        if search_term.startswith('@'):
+            search_term = search_term[1:]
         
         for file_path in self.data_files:
-            if len(results) >= max_results:
-                break
-            
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     for line in f:
@@ -229,26 +124,113 @@ class SearchEngine:
                         if not line:
                             continue
                         
-                        if email_lower in line.lower():
-                            results.append(line)
+                        line_lower = line.lower()
                         
-                        if len(results) >= max_results:
-                            break
-            
+                        # Check if search term is in line
+                        if search_term in line_lower:
+                            # Extract CLEAN email:password pairs (NO URLs at all)
+                            clean_pairs = self.extract_clean_email_pass_no_url(line)
+                            
+                            for email, password in clean_pairs:
+                                # Check if email contains the search term
+                                email_lower = email.lower()
+                                if (search_term in email_lower or 
+                                    f"@{search_term}" in email_lower or
+                                    search_term == email_lower.split('@')[-1] if '@' in email_lower else False):
+                                    
+                                    # Add only if it's a valid pair
+                                    if email and password:
+                                        results.append(f"{email}:{password}")
             except Exception as e:
                 logger.error(f"Error in {file_path}: {e}")
                 continue
         
-        return len(results), results
+        # Remove duplicates
+        unique_results = []
+        seen = set()
+        for result in results:
+            if result not in seen:
+                seen.add(result)
+                unique_results.append(result)
+        
+        logger.info(f"📧 Found {len(unique_results):,} CLEAN email:pass (NO URLs) for '{query}'")
+        return len(unique_results), unique_results
     
-    def search_login(self, login: str, max_results: int = 5000) -> Tuple[int, List[str]]:
+    def extract_clean_email_pass_no_url(self, line: str) -> List[Tuple[str, str]]:
+        """
+        Extract CLEAN email:password pairs from a line
+        REMOVES ALL URLs completely - returns only email:password
+        """
+        pairs = []
+        
+        # Remove URLs and protocol prefixes
+        # Remove http://, https://, ftp:// and any domain before email
+        line_clean = re.sub(r'https?://[^\s]+', '', line, flags=re.IGNORECASE)
+        line_clean = re.sub(r'ftp://[^\s]+', '', line_clean, flags=re.IGNORECASE)
+        line_clean = re.sub(r'www\.[^\s]+', '', line_clean, flags=re.IGNORECASE)
+        
+        # Remove common URL patterns before email
+        line_clean = re.sub(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\s*[:|;]', '', line_clean)
+        
+        # Now extract email:password pairs from cleaned line
+        # Pattern for email:password (email must have @ and .)
+        email_pattern = r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})'
+        
+        # Find all emails in the cleaned line
+        emails = re.findall(email_pattern, line_clean, re.IGNORECASE)
+        
+        for email in emails:
+            # Find the email in the original position
+            email_start = line.find(email)
+            if email_start == -1:
+                continue
+                
+            # Look for password after the email
+            after_email = line[email_start + len(email):]
+            
+            # Find the next non-separator content as password
+            password_match = re.search(r'^[^:|\s]*[:|\s]+([^\s]+)', after_email)
+            if password_match:
+                password = password_match.group(1)
+                # Make sure password is not a URL or domain
+                if not (password.startswith('http') or 
+                       '.' in password and len(password.split('.')[-1]) in [2, 3, 4] and
+                       not any(char.isdigit() for char in password.split('.')[-1])):
+                    pairs.append((email, password))
+            else:
+                # Try alternative extraction
+                parts = re.split(r'[:|;\s]', after_email, 1)
+                if len(parts) > 1 and parts[1].strip():
+                    password = parts[1].strip()
+                    if not (password.startswith('http') or 
+                           '.' in password and len(password.split('.')[-1]) in [2, 3, 4]):
+                        pairs.append((email, password))
+        
+        # If no pairs found with pattern, try manual parsing
+        if not pairs:
+            # Split by common separators
+            parts = re.split(r'[:|;]', line)
+            for i in range(len(parts) - 1):
+                if '@' in parts[i] and '.' in parts[i]:
+                    email_candidate = parts[i].strip()
+                    password_candidate = parts[i + 1].strip() if i + 1 < len(parts) else ""
+                    
+                    # Validate email
+                    if re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email_candidate):
+                        # Check if email_candidate is not a URL
+                        if not (email_candidate.startswith('http') or '://' in email_candidate):
+                            # Check if password is not empty and not a URL
+                            if password_candidate and not password_candidate.startswith('http'):
+                                pairs.append((email_candidate, password_candidate))
+        
+        return pairs
+    
+    def search_email_only(self, email: str) -> Tuple[int, List[str]]:
+        """Search for specific email addresses only - NO LIMIT"""
         results = []
-        login_lower = login.lower()
+        email_lower = email.lower().strip()
         
         for file_path in self.data_files:
-            if len(results) >= max_results:
-                break
-            
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     for line in f:
@@ -256,29 +238,32 @@ class SearchEngine:
                         if not line:
                             continue
                         
-                        if ':' in line:
-                            parts = line.split(':')
-                            if len(parts) >= 2:
-                                if login_lower in parts[0].lower():
-                                    results.append(line)
+                        # Find all emails in the line
+                        emails = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', line, re.IGNORECASE)
                         
-                        if len(results) >= max_results:
-                            break
-            
+                        for found_email in emails:
+                            if email_lower in found_email.lower():
+                                results.append(found_email)
             except Exception as e:
                 logger.error(f"Error in {file_path}: {e}")
                 continue
         
-        return len(results), results
+        # Remove duplicates
+        unique_results = []
+        seen = set()
+        for result in results:
+            if result not in seen:
+                seen.add(result)
+                unique_results.append(result)
+        
+        return len(unique_results), unique_results
     
-    def search_password(self, password: str, max_results: int = 5000) -> Tuple[int, List[str]]:
+    def search_login(self, login: str) -> Tuple[int, List[str]]:
+        """Search for login (username) - returns login:pass - NO LIMIT"""
         results = []
-        password_lower = password.lower()
+        login_lower = login.lower().strip()
         
         for file_path in self.data_files:
-            if len(results) >= max_results:
-                break
-            
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     for line in f:
@@ -286,26 +271,32 @@ class SearchEngine:
                         if not line:
                             continue
                         
-                        if password_lower in line.lower():
-                            results.append(line)
-                        
-                        if len(results) >= max_results:
-                            break
-            
+                        # Split by common separators
+                        parts = re.split(r'[:|;]', line)
+                        if len(parts) >= 2:
+                            username = parts[0].strip()
+                            password = parts[1].strip()
+                            
+                            # Check if it's a login (not email, not URL)
+                            if (login_lower in username.lower() and 
+                                '@' not in username and 
+                                '://' not in username and
+                                '.' not in username.split('/')[0] if '/' in username else True and
+                                password and 
+                                len(password) > 0):
+                                results.append(f"{username}:{password}")
             except Exception as e:
                 logger.error(f"Error in {file_path}: {e}")
                 continue
         
         return len(results), results
     
-    def search_dni_in_domain(self, domain: str, max_results: int = 10000) -> Tuple[int, List[str]]:
+    def search_password(self, password: str) -> Tuple[int, List[str]]:
+        """Search for password - returns login:pass or email:pass - NO LIMIT"""
         results = []
-        domain_lower = domain.lower()
+        pass_lower = password.lower().strip()
         
         for file_path in self.data_files:
-            if len(results) >= max_results:
-                break
-            
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     for line in f:
@@ -313,56 +304,106 @@ class SearchEngine:
                         if not line:
                             continue
                         
-                        if domain_lower in line.lower():
-                            dni_pattern = r'\b\d{7,8}[A-Z]?\b'
-                            if re.search(dni_pattern, line):
-                                if ':' in line:
-                                    results.append(line)
-                        
-                        if len(results) >= max_results:
-                            break
-            
+                        # Split by common separators
+                        parts = re.split(r'[:|;]', line)
+                        if len(parts) >= 2:
+                            username = parts[0].strip()
+                            found_password = parts[1].strip()
+                            
+                            # Check if password matches
+                            if pass_lower in found_password.lower():
+                                results.append(f"{username}:{found_password}")
             except Exception as e:
                 logger.error(f"Error in {file_path}: {e}")
                 continue
         
         return len(results), results
+    
+    def search_dni_domain_only_dni_pass(self, domain: str) -> Tuple[int, List[str]]:
+        """Search for DNI:password combos ONLY - NO emails - NO LIMIT"""
+        results = []
+        domain_lower = domain.lower().strip()
+        
+        if domain_lower.startswith('@'):
+            domain_lower = domain_lower[1:]
+        
+        # Solo patrones DNI:password (NO emails)
+        dni_pass_pattern = r'(\b\d{7,8}[A-Za-z]?\b)\s*[:|;]\s*([^\s]+)'
+        
+        for file_path in self.data_files:
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        line_lower = line.lower()
+                        
+                        # Check if domain is mentioned anywhere in the line
+                        if domain_lower in line_lower:
+                            # Find DNI:pass patterns
+                            matches = re.findall(dni_pass_pattern, line, re.IGNORECASE)
+                            for dni, password in matches:
+                                # Asegurarnos que no sea parte de un email
+                                if '@' not in dni and '@' not in password:
+                                    # Verificar que el DNI no esté en un email
+                                    if not re.search(rf'{dni}@', line_lower):
+                                        results.append(f"{dni.upper()}:{password}")
+            except Exception as e:
+                logger.error(f"Error in {file_path}: {e}")
+                continue
+        
+        # Remove duplicates
+        unique_results = []
+        seen = set()
+        for result in results:
+            if result not in seen:
+                seen.add(result)
+                unique_results.append(result)
+        
+        return len(unique_results), unique_results
     
     def get_stats(self) -> Dict:
+        total_lines = 0
         total_size = 0
+        
         for file_path in self.data_files:
             try:
-                total_size += os.path.getsize(file_path)
+                size = os.path.getsize(file_path)
+                total_size += size
+                
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    total_lines += sum(1 for _ in f)
             except:
                 pass
         
         return {
             "total_files": len(self.data_files),
-            "total_size_gb": total_size / (1024**3),
-            "recent_files": []
+            "total_lines": total_lines,
+            "total_size_mb": total_size / (1024 * 1024)
         }
     
     def add_data_file(self, file_path: str) -> Tuple[bool, str]:
         try:
-            timestamp = int(time.time())
+            import shutil
             filename = os.path.basename(file_path)
-            unique_filename = f"{timestamp}_{filename}"
-            dest_path = os.path.join(self.data_dir, unique_filename)
-            
+            dest_path = os.path.join(self.data_dir, filename)
             shutil.copy2(file_path, dest_path)
             self.load_all_data()
-            return True, unique_filename
+            return True, filename
         except Exception as e:
             return False, str(e)
 
 # ============================================================================
-# CREDIT SYSTEM WITH AUTO-CREATE USERS
+# CREDIT SYSTEM - SIN CAMBIOS
 # ============================================================================
 
 class CreditSystem:
     def __init__(self, db_path: str = DB_PATH):
         self.db_path = db_path
         self.init_database()
+        logger.info("✅ Database initialized")
     
     def get_connection(self):
         conn = sqlite3.connect(self.db_path)
@@ -370,13 +411,48 @@ class CreditSystem:
         return conn
     
     def init_database(self):
-        pass
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id INTEGER PRIMARY KEY,
+                    username TEXT,
+                    first_name TEXT,
+                    daily_credits INTEGER DEFAULT 2,
+                    extra_credits INTEGER DEFAULT 0,
+                    total_searches INTEGER DEFAULT 0,
+                    referrals INTEGER DEFAULT 0,
+                    referral_code TEXT UNIQUE,
+                    referred_by INTEGER,
+                    join_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_reset DATE DEFAULT CURRENT_DATE
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS transactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    amount INTEGER,
+                    type TEXT,
+                    description TEXT,
+                    date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS daily_resets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reset_date DATE UNIQUE,
+                    users_reset INTEGER DEFAULT 0,
+                    reset_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            conn.commit()
     
-    def generate_referral_code(self, user_id: int) -> str:
-        code = f"REF{user_id}{random.randint(1000, 9999)}"
-        return code
-    
-    def get_or_create_user(self, user_id: int, username: str = "", first_name: str = "", referred_by: Optional[int] = None):
+    def get_or_create_user(self, user_id: int, username: str = "", first_name: str = "", referred_by: int = None):
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
@@ -387,43 +463,30 @@ class CreditSystem:
                 self.check_daily_reset(user_id)
                 return dict(user)
             
-            referral_code = self.generate_referral_code(user_id)
+            referral_code = str(uuid.uuid4())[:8].upper()
             
             cursor.execute('''
-                INSERT INTO users 
-                (user_id, username, first_name, daily_credits, referral_code, referred_by, last_reset)
-                VALUES (?, ?, ?, 2, ?, ?, DATE('now'))
+                INSERT INTO users (user_id, username, first_name, daily_credits, referral_code, referred_by)
+                VALUES (?, ?, ?, 2, ?, ?)
             ''', (user_id, username, first_name, referral_code, referred_by))
             
             cursor.execute('''
                 INSERT INTO transactions (user_id, amount, type, description)
                 VALUES (?, ?, ?, ?)
-            ''', (user_id, 2, 'daily_reset', '2 daily initial credits'))
+            ''', (user_id, 2, 'welcome', '2 free welcome credits'))
             
             if referred_by:
                 cursor.execute('''
-                    INSERT INTO referrals (referrer_id, referred_id)
-                    VALUES (?, ?)
-                ''', (referred_by, user_id))
-                
-                cursor.execute('''
                     UPDATE users 
-                    SET extra_credits = extra_credits + ?,
-                        referrals_count = referrals_count + 1
+                    SET referrals = referrals + 1,
+                        extra_credits = extra_credits + 1
                     WHERE user_id = ?
-                ''', (REFERRAL_BONUS, referred_by))
+                ''', (referred_by,))
                 
                 cursor.execute('''
-                    INSERT INTO transactions 
-                    (user_id, amount, type, description)
+                    INSERT INTO transactions (user_id, amount, type, description)
                     VALUES (?, ?, ?, ?)
-                ''', (referred_by, REFERRAL_BONUS, 'referral_bonus', f'Referral bonus for user {user_id}'))
-                
-                cursor.execute('''
-                    UPDATE referrals 
-                    SET bonus_credited = TRUE
-                    WHERE referrer_id = ? AND referred_id = ?
-                ''', (referred_by, user_id))
+                ''', (referred_by, 1, 'referral', f'Referral credit for user {user_id}'))
             
             conn.commit()
             
@@ -434,8 +497,7 @@ class CreditSystem:
                 'daily_credits': 2,
                 'extra_credits': 0,
                 'referral_code': referral_code,
-                'referred_by': referred_by,
-                'referrals_count': 0
+                'referred_by': referred_by
             }
     
     def check_daily_reset(self, user_id: int):
@@ -449,15 +511,10 @@ class CreditSystem:
             result = cursor.fetchone()
             
             if result:
-                last_reset_str = result['last_reset']
+                last_reset = result['last_reset']
                 today = datetime.now().date()
                 
-                try:
-                    last_reset = datetime.strptime(last_reset_str, '%Y-%m-%d').date()
-                except:
-                    last_reset = today
-                
-                if last_reset != today:
+                if last_reset != str(today):
                     cursor.execute('''
                         UPDATE users 
                         SET daily_credits = 2,
@@ -483,6 +540,7 @@ class CreditSystem:
             
             if result:
                 self.check_daily_reset(user_id)
+                
                 cursor.execute(
                     'SELECT daily_credits, extra_credits FROM users WHERE user_id = ?',
                     (user_id,)
@@ -550,31 +608,44 @@ class CreditSystem:
             conn.commit()
             return True
     
+    def get_user_info(self, user_id: int):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
+            result = cursor.fetchone()
+            return dict(result) if result else None
+    
+    def get_referral_info(self, user_id: int):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT referral_code FROM users WHERE user_id = ?', (user_id,))
+            result = cursor.fetchone()
+            
+            if not result:
+                return None
+            
+            referral_code = result['referral_code']
+            
+            cursor.execute('SELECT COUNT(*) as count FROM users WHERE referred_by = ?', (user_id,))
+            referrals_count = cursor.fetchone()['count']
+            
+            return {
+                'referral_code': referral_code,
+                'referrals_count': referrals_count,
+                'referral_link': f"https://t.me/{BOT_NAME.replace(' ', '')}?start={referral_code}"
+            }
+    
     def add_credits_to_user(self, user_id: int, amount: int, admin_id: int, credit_type: str = 'extra') -> Tuple[bool, str]:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
-            # AUTO-CREATE USER IF NOT EXISTS
             cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
             result = cursor.fetchone()
             
             if not result:
-                # Create user automatically
-                referral_code = self.generate_referral_code(user_id)
-                cursor.execute('''
-                    INSERT INTO users 
-                    (user_id, daily_credits, referral_code, last_reset)
-                    VALUES (?, 2, ?, DATE('now'))
-                ''', (user_id, referral_code))
-                
-                cursor.execute('''
-                    INSERT INTO transactions (user_id, amount, type, description)
-                    VALUES (?, ?, ?, ?)
-                ''', (user_id, 2, 'daily_reset', 'Auto-created by admin'))
-                
-                conn.commit()
+                return False, "User not found"
             
-            # Now add credits
             if credit_type == 'extra':
                 cursor.execute(
                     'UPDATE users SET extra_credits = extra_credits + ? WHERE user_id = ?',
@@ -594,45 +665,6 @@ class CreditSystem:
             
             conn.commit()
             return True, f"✅ {amount} {credit_type} credits added"
-    
-    def get_user_info(self, user_id: int):
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
-            result = cursor.fetchone()
-            return dict(result) if result else None
-    
-    def get_referral_stats(self, user_id: int):
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            cursor.execute('''
-                SELECT 
-                    referrals_count,
-                    referral_code,
-                    (SELECT COUNT(*) FROM referrals WHERE referrer_id = ?) as total_referred
-                FROM users 
-                WHERE user_id = ?
-            ''', (user_id, user_id))
-            
-            result = cursor.fetchone()
-            return dict(result) if result else None
-    
-    def get_referral_link(self, user_id: int) -> str:
-        user_info = self.get_user_info(user_id)
-        if user_info and user_info.get('referral_code'):
-            bot_name_clean = BOT_NAME.split()[0].replace('🔍', '').strip()
-            return f"https://t.me/{bot_name_clean}?start=ref_{user_info['referral_code']}"
-        return ""
-    
-    def validate_referral_code(self, code: str) -> Tuple[bool, Optional[int]]:
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT user_id FROM users WHERE referral_code = ?', (code,))
-            result = cursor.fetchone()
-            if result:
-                return True, result['user_id']
-            return False, None
     
     def get_all_users(self, limit: int = 50):
         with self.get_connection() as conn:
@@ -654,380 +686,47 @@ class CreditSystem:
             cursor.execute('SELECT SUM(daily_credits + extra_credits) as total FROM users')
             stats['total_credits'] = cursor.fetchone()['total'] or 0
             
-            cursor.execute('SELECT SUM(referrals_count) as total FROM users')
+            cursor.execute('SELECT SUM(referrals) as total FROM users')
             stats['total_referrals'] = cursor.fetchone()['total'] or 0
             
             return stats
+    
+    def reset_all_daily_credits(self) -> int:
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute('SELECT COUNT(*) as count FROM users')
+            total_users = cursor.fetchone()['count']
+            
+            cursor.execute('''
+                UPDATE users 
+                SET daily_credits = 2,
+                    last_reset = DATE('now')
+            ''')
+            
+            cursor.execute('''
+                INSERT INTO daily_resets (reset_date, users_reset)
+                VALUES (DATE('now'), ?)
+            ''', (total_users,))
+            
+            conn.commit()
+            return total_users
+    
+    def get_user_by_username(self, username: str):
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM users WHERE username = ?', (username,))
+            result = cursor.fetchone()
+            return dict(result) if result else None
 
 # ============================================================================
-# LARGE FILE PROCESSOR
-# ============================================================================
-
-class LargeFileProcessor:
-    def __init__(self):
-        self.processing_tasks = {}
-    
-    def calculate_file_hash(self, file_path: str) -> str:
-        sha256_hash = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for byte_block in iter(lambda: f.read(4096), b""):
-                sha256_hash.update(byte_block)
-        return sha256_hash.hexdigest()
-    
-    def process_large_txt_file(self, file_path: str, output_dir: str) -> dict:
-        stats = {
-            'lines_processed': 0,
-            'valid_lines': 0,
-            'errors': 0,
-            'output_file': None
-        }
-        
-        try:
-            file_size = os.path.getsize(file_path)
-            output_file = os.path.join(output_dir, "processed.txt")
-            
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as infile, \
-                 open(output_file, 'w', encoding='utf-8') as outfile:
-                
-                chunk_size = 100000
-                chunk = []
-                
-                for line in infile:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    
-                    chunk.append(line)
-                    stats['lines_processed'] += 1
-                    
-                    if len(chunk) >= chunk_size:
-                        for chunk_line in chunk:
-                            if ':' in chunk_line and len(chunk_line) > 3:
-                                outfile.write(chunk_line + '\n')
-                                stats['valid_lines'] += 1
-                        chunk = []
-                
-                for chunk_line in chunk:
-                    if ':' in chunk_line and len(chunk_line) > 3:
-                        outfile.write(chunk_line + '\n')
-                        stats['valid_lines'] += 1
-            
-            stats['output_file'] = output_file
-            logger.info(f"Processed file: {stats['lines_processed']} lines, {stats['valid_lines']} valid")
-            
-            return stats
-        
-        except Exception as e:
-            logger.error(f"Error processing large file: {e}")
-            stats['errors'] += 1
-            return stats
-    
-    def process_compressed_file(self, file_path: str, output_dir: str) -> str:
-        import zipfile
-        import tarfile
-        import gzip
-        
-        file_ext = os.path.splitext(file_path)[1].lower()
-        extracted_dir = os.path.join(output_dir, "extracted")
-        os.makedirs(extracted_dir, exist_ok=True)
-        
-        try:
-            if file_ext == '.zip':
-                with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                    zip_ref.extractall(extracted_dir)
-            elif file_ext == '.tar':
-                with tarfile.open(file_path, 'r') as tar_ref:
-                    tar_ref.extractall(extracted_dir)
-            elif file_ext == '.gz':
-                with gzip.open(file_path, 'rb') as gz_ref:
-                    with open(os.path.join(extracted_dir, "extracted.txt"), 'wb') as out_ref:
-                        out_ref.write(gz_ref.read())
-            else:
-                logger.error(f"Unsupported compressed format: {file_ext}")
-                return None
-            
-            txt_files = []
-            for root, dirs, files in os.walk(extracted_dir):
-                for file in files:
-                    if file.endswith('.txt'):
-                        txt_files.append(os.path.join(root, file))
-            
-            if txt_files:
-                combined_file = os.path.join(output_dir, "combined.txt")
-                with open(combined_file, 'w', encoding='utf-8') as outfile:
-                    for txt_file in txt_files:
-                        try:
-                            with open(txt_file, 'r', encoding='utf-8', errors='ignore') as infile:
-                                for line in infile:
-                                    outfile.write(line)
-                        except Exception as e:
-                            logger.error(f"Error reading {txt_file}: {e}")
-                            continue
-                
-                return combined_file
-            
-            return None
-        
-        except Exception as e:
-            logger.error(f"Error processing compressed file: {e}")
-            return None
-
-# ============================================================================
-# MAIN BOT CLASS
+# MAIN BOT - FIXED: ALL RESULTS, NO LIMITS
 # ============================================================================
 
 class ULPBot:
     def __init__(self, search_engine: SearchEngine, credit_system: CreditSystem):
         self.search_engine = search_engine
         self.credit_system = credit_system
-        self.file_processor = LargeFileProcessor()
-        self.pending_searches = {}
-        self.active_uploads = {}
-    
-    async def upload_large_system(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Sistema de upload para archivos grandes (por partes)"""
-        user_id = update.effective_user.id
-        
-        if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Admins only.")
-            return
-        
-        # Crear sesión de upload única
-        upload_id = f"upload_{user_id}_{int(time.time())}"
-        self.active_uploads[upload_id] = {
-            'parts': [],
-            'total_parts': 0,
-            'original_filename': '',
-            'start_time': time.time(),
-            'user_id': user_id
-        }
-        
-        await update.message.reply_text(
-            f"📦 <b>LARGE FILE UPLOAD SYSTEM</b>\n\n"
-            f"<b>Upload ID:</b> <code>{upload_id}</code>\n\n"
-            f"<b>📝 INSTRUCCIONES:</b>\n"
-            f"1. <b>Divide tu archivo</b> en partes de 20MB\n"
-            f"2. <b>Nombra las partes:</b> archivo.part001, archivo.part002, etc.\n"
-            f"3. <b>Envía las partes</b> una por una al bot\n"
-            f"4. <b>Cuando termines</b>, envía: <code>/finishupload {upload_id}</code>\n\n"
-            f"<b>🔧 HERRAMIENTAS:</b>\n"
-            f"• 7zip: <code>7z a -v20m archivo.7z tu_archivo.txt</code>\n"
-            f"• WinRAR: Dividir en volúmenes\n"
-            f"• HJSplit (Windows)\n\n"
-            f"<i>El bot combinará las partes automáticamente</i>",
-            parse_mode='HTML'
-        )
-    
-    async def handle_file_part(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Manejar partes de archivos grandes"""
-        user_id = update.effective_user.id
-        
-        if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Admins only.")
-            return
-        
-        if not update.message.document:
-            return
-        
-        document = update.message.document
-        filename = document.file_name
-        
-        # Verificar si es parte de archivo
-        if '.part' in filename.lower() or filename.lower().endswith(('.001', '.002', '.003')):
-            await self._process_file_part(update, document, filename, user_id)
-        else:
-            # Archivo normal - usar sistema antiguo
-            await self.handle_large_file_upload(update, context)
-    
-    async def _process_file_part(self, update, document, filename, user_id):
-        """Procesar una parte de archivo"""
-        msg = await update.message.reply_text(f"📥 <b>Processing part: {filename}</b>", parse_mode='HTML')
-        
-        try:
-            # Extraer nombre base y número de parte
-            base_name = None
-            part_num = None
-            
-            # Patrones: archivo.part001, archivo.001, archivo.r00, etc.
-            patterns = [
-                r'(.+)\.part(\d+)',  # archivo.part001
-                r'(.+)\.(\d{3})$',   # archivo.001
-                r'(.+)\.r(\d{2})$',  # archivo.r00 (rar)
-                r'(.+)\.z(\d{2})$',  # archivo.z01 (zip)
-            ]
-            
-            for pattern in patterns:
-                match = re.search(pattern, filename.lower())
-                if match:
-                    base_name = match.group(1)
-                    part_num = int(match.group(2))
-                    break
-            
-            if not base_name or part_num is None:
-                await msg.edit_text(f"❌ <b>Invalid part filename: {filename}</b>", parse_mode='HTML')
-                return
-            
-            # Descargar parte
-            file = await document.get_file()
-            
-            # Directorio para este upload
-            upload_dir = os.path.join(UPLOAD_TEMP_DIR, f"multipart_{base_name}_{user_id}")
-            os.makedirs(upload_dir, exist_ok=True)
-            
-            part_path = os.path.join(upload_dir, f"part_{part_num:03d}")
-            await file.download_to_drive(part_path)
-            
-            # Actualizar registro de partes
-            parts_file = os.path.join(upload_dir, "parts.json")
-            parts_data = {}
-            
-            if os.path.exists(parts_file):
-                with open(parts_file, 'r') as f:
-                    parts_data = json.load(f)
-            
-            parts_data[str(part_num)] = {
-                'filename': filename,
-                'size': document.file_size,
-                'downloaded': True,
-                'path': part_path
-            }
-            
-            with open(parts_file, 'w') as f:
-                json.dump(parts_data, f)
-            
-            total_parts = len(parts_data)
-            
-            await msg.edit_text(
-                f"✅ <b>PART RECEIVED</b>\n\n"
-                f"<b>File:</b> {base_name}\n"
-                f"<b>Part:</b> {filename} (#{part_num})\n"
-                f"<b>Size:</b> {document.file_size/(1024*1024):.1f} MB\n"
-                f"<b>Total parts received:</b> {total_parts}\n\n"
-                f"<i>Send next part or finish with:</i>\n"
-                f"<code>/finishupload {base_name}</code>",
-                parse_mode='HTML'
-            )
-            
-        except Exception as e:
-            await msg.edit_text(f"❌ <b>Error:</b> {str(e)[:200]}", parse_mode='HTML')
-    
-    async def finish_upload_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Finalizar upload de partes y combinarlas"""
-        user_id = update.effective_user.id
-        
-        if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Admins only.")
-            return
-        
-        if not context.args:
-            await update.message.reply_text(
-                "❌ <b>Usage:</b> <code>/finishupload base_name</code>\n\n"
-                "<b>Example:</b> <code>/finishupload mydatabase</code>",
-                parse_mode='HTML'
-            )
-            return
-        
-        base_name = context.args[0]
-        upload_dir = os.path.join(UPLOAD_TEMP_DIR, f"multipart_{base_name}_{user_id}")
-        
-        if not os.path.exists(upload_dir):
-            await update.message.reply_text(f"❌ No upload found for: {base_name}")
-            return
-        
-        msg = await update.message.reply_text(f"🔄 <b>Combining parts for {base_name}...</b>", parse_mode='HTML')
-        
-        try:
-            # Leer información de partes
-            parts_file = os.path.join(upload_dir, "parts.json")
-            if not os.path.exists(parts_file):
-                await msg.edit_text("❌ No parts information found")
-                return
-            
-            with open(parts_file, 'r') as f:
-                parts_data = json.load(f)
-            
-            # Combinar partes en orden
-            combined_file = os.path.join(upload_dir, f"{base_name}_combined.txt")
-            
-            with open(combined_file, 'wb') as outfile:
-                for part_num in sorted([int(k) for k in parts_data.keys()]):
-                    part_info = parts_data[str(part_num)]
-                    part_path = part_info['path']
-                    
-                    if os.path.exists(part_path):
-                        with open(part_path, 'rb') as infile:
-                            shutil.copyfileobj(infile, outfile)
-                        
-                        await msg.edit_text(
-                            f"🔄 <b>Combining part {part_num}/{len(parts_data)}...</b>\n"
-                            f"<i>Processing {base_name}</i>",
-                            parse_mode='HTML'
-                        )
-            
-            # Procesar archivo combinado
-            file_size = os.path.getsize(combined_file)
-            
-            await msg.edit_text(
-                f"✅ <b>FILE COMBINED SUCCESSFULLY!</b>\n\n"
-                f"<b>File:</b> {base_name}\n"
-                f"<b>Total parts:</b> {len(parts_data)}\n"
-                f"<b>Final size:</b> {file_size/(1024*1024):.2f} MB\n"
-                f"<b>Status:</b> Processing combined file...",
-                parse_mode='HTML'
-            )
-            
-            # Procesar archivo combinado
-            await self._process_upload_background(combined_file, f"{base_name}_combined.txt", user_id, msg)
-            
-            # Limpiar partes temporales
-            try:
-                shutil.rmtree(upload_dir)
-            except:
-                pass
-            
-        except Exception as e:
-            await msg.edit_text(f"❌ <b>Error combining parts:</b> {str(e)[:200]}", parse_mode='HTML')
-    
-    async def split_help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Mostrar ayuda para dividir archivos"""
-        user_id = update.effective_user.id
-        
-        if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Admins only.")
-            return
-        
-        help_text = """
-📦 <b>HOW TO UPLOAD LARGE FILES (>20MB)</b>
-
-🔧 <b>METHOD 1: Using 7zip (RECOMMENDED)</b>
-<code>7z a -v20m database.7z your_file.txt</code>
-• Creates: database.7z.001, database.7z.002, etc.
-• Send each .00X file to bot
-
-🔧 <b>METHOD 2: Using HJSplit (Windows)</b>
-1. Download HJSplit: http://www.hjsplit.org/
-2. Split file into 20MB parts
-3. Send .001, .002, etc. to bot
-
-🔧 <b>METHOD 3: Using split command (Linux/Mac)</b>
-<code>split -b 20m large_file.txt large_file.part</code>
-• Creates: large_file.partaa, large_file.partab, etc.
-
-📝 <b>STEPS:</b>
-1. Split your file into 20MB parts
-2. Send parts one by one to bot
-3. When finished: <code>/finishupload filename</code>
-
-⚡ <b>BOT WILL:</b>
-• Auto-detect part numbers
-• Combine all parts
-• Process as normal file
-• Add to search database
-
-💡 <b>TIP:</b> For 38MB file → 2 parts (20MB + 18MB)
-"""
-        
-        await update.message.reply_text(help_text, parse_mode='HTML')
     
     def escape_html(self, text: str) -> str:
         if not text:
@@ -1038,16 +737,23 @@ class ULPBot:
         text = text.replace('>', '&gt;')
         return text
     
+    # ============================================================================
+    # START COMMAND
+    # ============================================================================
+    
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
-        referred_by = None
+        args = context.args
         
-        if context.args and len(context.args) > 0:
-            if context.args[0].startswith('ref_'):
-                ref_code = context.args[0][4:]
-                valid, referrer_id = self.credit_system.validate_referral_code(ref_code)
-                if valid and referrer_id != user.id:
-                    referred_by = referrer_id
+        referred_by = None
+        if args and len(args) > 0:
+            referral_code = args[0]
+            with self.credit_system.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT user_id FROM users WHERE referral_code = ?', (referral_code,))
+                result = cursor.fetchone()
+                if result:
+                    referred_by = result['user_id']
         
         user_info = self.credit_system.get_or_create_user(
             user_id=user.id,
@@ -1061,12 +767,14 @@ class ULPBot:
         extra_credits = total_credits - daily_credits
         stats = self.search_engine.get_stats()
         
+        welcome_msg = ""
+        if referred_by:
+            welcome_msg = "\n🎉 You joined using a referral link! +1 credit for your friend!"
+        
         keyboard = [
-            [InlineKeyboardButton("🔍 Search Domain", callback_data="menu_search")],
-            [InlineKeyboardButton("📧 Search Email", callback_data="menu_email")],
+            [InlineKeyboardButton("🔍 /search - Search Domain", callback_data="start_search")],
             [InlineKeyboardButton("💰 My Credits", callback_data="menu_credits")],
-            [InlineKeyboardButton("👥 Referral System", callback_data="menu_referral")],
-            [InlineKeyboardButton("📋 /help", callback_data="menu_help")],
+            [InlineKeyboardButton("📋 Help", callback_data="menu_help")],
         ]
         
         if user.id in ADMIN_IDS:
@@ -1074,1242 +782,1122 @@ class ULPBot:
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        welcome_msg = f"<b>👋 Welcome {self.escape_html(user.first_name)}!</b>\n\n"
-        
-        if referred_by:
-            welcome_msg += f"<b>🎉 REFERRAL BONUS!</b>\n"
-            welcome_msg += f"You joined using a referral link!\n\n"
-        
-        welcome_msg += (
-            f"<b>🚀 {BOT_NAME}</b>\n"
-            f"<b>📍 Version:</b> {BOT_VERSION}\n\n"
-            f"<b>💰 YOUR CREDITS:</b>\n"
-            f"🆓 <b>Daily:</b> <code>{daily_credits}</code>/{MAX_FREE_CREDITS} (resets at {RESET_HOUR}:00)\n"
-            f"💎 <b>Extra:</b> <code>{extra_credits}</code> (permanent)\n"
-            f"🎯 <b>Total:</b> <code>{total_credits}</code>\n\n"
-            f"<b>📁 Database Size:</b> <code>{stats['total_size_gb']:.2f}</code> GB\n"
-            f"<b>📂 Files in DB:</b> <code>{stats['total_files']}</code>\n\n"
-            f"<i>Use buttons to start</i>"
+        message = (
+            f"<b>🔍 {BOT_NAME}</b>\n"
+            f"<i>Version: {BOT_VERSION}</i>\n\n"
+            f"Welcome <b>{self.escape_html(user.first_name)}</b>!{welcome_msg}\n\n"
+            f"<b>Your Credits:</b>\n"
+            f"• Daily: {daily_credits}/2 (reset at midnight UTC)\n"
+            f"• Extra: {extra_credits}\n"
+            f"• Total: {total_credits}\n\n"
+            f"<b>Database Stats:</b>\n"
+            f"• Files: {stats['total_files']:,}\n"
+            f"• Lines: {stats['total_lines']:,}\n"
+            f"• Size: {stats['total_size_mb']:,.1f} MB\n\n"
+            f"<b>⚠️ IMPORTANT:</b>\n"
+            f"• <b>ALL</b> results in ONE file\n"
+            f"• <b>NO LIMIT</b> on number of results\n"
+            f"• Email:Pass format = <b>NO URLs</b>\n\n"
+            f"Use <b>/search</b> to start!"
         )
         
-        await update.message.reply_text(welcome_msg, parse_mode='HTML', reply_markup=reply_markup)
+        await update.message.reply_html(message, reply_markup=reply_markup)
+    
+    # ============================================================================
+    # SEARCH COMMANDS
+    # ============================================================================
     
     async def search_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        
-        if not self.credit_system.has_enough_credits(user_id):
-            await update.message.reply_text(
-                f"<b>❌ NO CREDITS</b>\n\n"
-                f"Your daily credits reset at {RESET_HOUR}:00\n"
-                f"Contact {BOT_OWNER} for extra credits.",
-                parse_mode='HTML'
-            )
-            return ConversationHandler.END
+        """Main search command"""
+        user = update.effective_user
         
         if not context.args:
-            await update.message.reply_text(
-                "<b>❌ Usage:</b> <code>/search domain.com</code>\n\n"
-                "<b>Examples:</b>\n"
-                "<code>/search gmail.com</code>\n"
-                "<code>/search facebook.com</code>",
-                parse_mode='HTML'
+            await update.message.reply_html(
+                "🔍 <b>Search Command</b>\n\n"
+                "Usage: <code>/search [query]</code>\n\n"
+                "<i>Examples:</i>\n"
+                "<code>/search google.com</code>\n"
+                "<code>/search user@gmail.com</code>\n"
+                "<code>/search @hotmail.com</code>\n\n"
+                "Then choose format!\n\n"
+                "<b>📁 ALL RESULTS IN ONE FILE - NO LIMITS</b>"
             )
-            return ConversationHandler.END
+            return
         
-        query = context.args[0].lower()
-        self.pending_searches[user_id] = {"query": query}
+        query = ' '.join(context.args)
         
         keyboard = [
             [
-                InlineKeyboardButton("🔐 email:pass", callback_data="format_emailpass"),
-                InlineKeyboardButton("🔗 url:email:pass", callback_data="format_urlemailpass")
+                InlineKeyboardButton("📧 Email:Pass Only", callback_data=f"format_clean:{query}"),
+                InlineKeyboardButton("🌐 Full Lines", callback_data=f"format_full:{query}")
             ],
-            [InlineKeyboardButton("❌ Cancel", callback_data="format_cancel")]
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_search")]
         ]
-        
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        daily_credits = self.credit_system.get_daily_credits_left(user_id)
-        total_credits = self.credit_system.get_user_credits(user_id)
-        
-        await update.message.reply_text(
-            f"<b>🔍 SEARCH DOMAIN</b>\n\n"
-            f"<b>Domain:</b> <code>{self.escape_html(query)}</code>\n"
-            f"<b>Daily credits:</b> <code>{daily_credits}</code>/{MAX_FREE_CREDITS}\n"
-            f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-            f"<b>Select format:</b>",
-            parse_mode='HTML',
+        await update.message.reply_html(
+            f"🔍 <b>Search Query:</b> <code>{self.escape_html(query)}</code>\n\n"
+            f"<b>Choose format:</b>\n"
+            f"1. <b>Email:Pass Only</b> - Clean format (NO URLs)\n"
+            f"2. <b>Full Lines</b> - Complete lines with URLs\n\n"
+            f"<i>Your credits: {self.credit_system.get_user_credits(user.id)}</i>\n\n"
+            f"<b>📁 Results delivered in ONE file - ALL results included</b>",
             reply_markup=reply_markup
         )
-        
-        return CHOOSING_FORMAT
-    
-    async def format_selected_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        
-        user_id = query.from_user.id
-        
-        if user_id not in self.pending_searches:
-            await query.edit_message_text("❌ Search expired.")
-            return ConversationHandler.END
-        
-        if query.data == "format_cancel":
-            await query.edit_message_text("✅ Canceled.")
-            del self.pending_searches[user_id]
-            return ConversationHandler.END
-        
-        search_data = self.pending_searches[user_id]
-        domain = search_data["query"]
-        
-        await query.edit_message_text(f"🔄 <b>Searching {self.escape_html(domain)}...</b>", parse_mode='HTML')
-        
-        total_found, results = self.search_engine.search_domain(domain)
-        
-        if total_found == 0:
-            await query.edit_message_text(
-                f"<b>❌ NOT FOUND</b>\n\n"
-                f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
-                f"<b>Files scanned:</b> <code>{self.search_engine.get_stats()['total_files']}</code>\n\n"
-                f"💰 <b>Credit NOT consumed</b>",
-                parse_mode='HTML'
-            )
-            del self.pending_searches[user_id]
-            return ConversationHandler.END
-        
-        if not self.credit_system.use_credits(user_id, "domain", domain, total_found):
-            await query.edit_message_text("<b>❌ Error using credits</b>", parse_mode='HTML')
-            del self.pending_searches[user_id]
-            return ConversationHandler.END
-        
-        total_credits = self.credit_system.get_user_credits(user_id)
-        daily_credits = self.credit_system.get_daily_credits_left(user_id)
-        
-        if total_found > 100:
-            await self.send_results_as_txt(query, results, domain, total_found, daily_credits, total_credits)
-        else:
-            await self.send_results_as_message(query, results, domain, total_found, daily_credits, total_credits)
-        
-        del self.pending_searches[user_id]
-        return ConversationHandler.END
-    
-    async def send_results_as_txt(self, query_callback, results: list, domain: str, total_found: int, daily_credits: int, total_credits: int):
-        txt_buffer = io.BytesIO()
-        content = "\n".join(results)
-        txt_buffer.write(content.encode('utf-8'))
-        txt_buffer.seek(0)
-        
-        await query_callback.message.reply_document(
-            document=txt_buffer,
-            filename=f"ulp_{domain}.txt",
-            caption=(
-                f"<b>📁 RESULTS</b>\n\n"
-                f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
-                f"<b>Results:</b> <code>{total_found}</code>\n"
-                f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-                f"<b>Total credits:</b> <code>{total_credits}</code>"
-            ),
-            parse_mode='HTML'
-        )
-        
-        await query_callback.edit_message_text(
-            f"<b>✅ SEARCH COMPLETED</b>\n\n"
-            f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
-            f"<b>Results:</b> <code>{total_found}</code>\n"
-            f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-            f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-            f"<i>Results sent as file</i>",
-            parse_mode='HTML'
-        )
-    
-    async def send_results_as_message(self, query_callback, results: list, domain: str, total_found: int, daily_credits: int, total_credits: int):
-        response = (
-            f"<b>✅ SEARCH COMPLETED</b>\n\n"
-            f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
-            f"<b>Results:</b> <code>{total_found}</code>\n"
-            f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-            f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-            f"<b>First results:</b>\n"
-            f"<pre>"
-        )
-        
-        for line in results[:10]:
-            if len(line) > 80:
-                line = line[:77] + "..."
-            response += f"{self.escape_html(line)}\n"
-        
-        response += "</pre>"
-        
-        if total_found > 10:
-            response += f"\n<b>... and {total_found-10} more results</b>"
-        
-        await query_callback.edit_message_text(response, parse_mode='HTML')
     
     async def email_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        
-        if not self.credit_system.has_enough_credits(user_id):
-            await update.message.reply_text(
-                f"<b>❌ NO CREDITS</b>\n\n"
-                f"Your daily credits reset at {RESET_HOUR}:00",
-                parse_mode='HTML'
-            )
-            return
+        """Search by email"""
+        user = update.effective_user
         
         if not context.args:
-            await update.message.reply_text(
-                "<b>❌ Usage:</b> <code>/email user@gmail.com</code>",
-                parse_mode='HTML'
+            await update.message.reply_html(
+                "📧 <b>Email Search</b>\n\n"
+                "Usage: <code>/email [email]</code>\n\n"
+                "<i>Examples:</i>\n"
+                "<code>/email user@gmail.com</code>\n"
+                "<code>/email @hotmail.com</code>\n"
+                "<code>/email admin@example.com</code>"
             )
             return
         
-        email = context.args[0].lower()
-        msg = await update.message.reply_text(f"📧 <b>Searching {self.escape_html(email)}...</b>", parse_mode='HTML')
-        
-        total_found, results = self.search_engine.search_email(email)
-        
-        if total_found == 0:
-            await msg.edit_text(
-                f"<b>❌ NOT FOUND</b>\n\n"
-                f"<b>Email:</b> <code>{self.escape_html(email)}</code>",
-                parse_mode='HTML'
-            )
-            return
-        
-        if not self.credit_system.use_credits(user_id, "email", email, total_found):
-            await msg.edit_text("<b>❌ Error using credits</b>", parse_mode='HTML')
-            return
-        
-        total_credits = self.credit_system.get_user_credits(user_id)
-        daily_credits = self.credit_system.get_daily_credits_left(user_id)
-        
-        response = (
-            f"<b>✅ EMAIL FOUND</b>\n\n"
-            f"<b>Email:</b> <code>{self.escape_html(email)}</code>\n"
-            f"<b>Results:</b> <code>{total_found}</code>\n"
-            f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-            f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-            f"<b>First results:</b>\n"
-            f"<pre>"
-        )
-        
-        for line in results[:5]:
-            response += f"{self.escape_html(line)}\n"
-        
-        response += "</pre>"
-        
-        await msg.edit_text(response, parse_mode='HTML')
+        query = ' '.join(context.args)
+        await self.perform_specific_search(update, user.id, 'email', query)
     
     async def login_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        
-        if not self.credit_system.has_enough_credits(user_id):
-            await update.message.reply_text(
-                f"<b>❌ NO CREDITS</b>\n\n"
-                f"Your daily credits reset at {RESET_HOUR}:00",
-                parse_mode='HTML'
-            )
-            return
+        """Search by login/username"""
+        user = update.effective_user
         
         if not context.args:
-            await update.message.reply_text(
-                "<b>❌ Usage:</b> <code>/login username</code>",
-                parse_mode='HTML'
+            await update.message.reply_html(
+                "👤 <b>Login Search</b>\n\n"
+                "Usage: <code>/login [username]</code>\n\n"
+                "<i>Examples:</i>\n"
+                "<code>/login admin</code>\n"
+                "<code>/login user123</code>\n"
+                "<code>/login john_doe</code>"
             )
             return
         
-        login = context.args[0].lower()
-        msg = await update.message.reply_text(f"👤 <b>Searching {self.escape_html(login)}...</b>", parse_mode='HTML')
-        
-        total_found, results = self.search_engine.search_login(login)
-        
-        if total_found == 0:
-            await msg.edit_text(
-                f"<b>❌ NOT FOUND</b>\n\n"
-                f"<b>Login:</b> <code>{self.escape_html(login)}</code>",
-                parse_mode='HTML'
-            )
-            return
-        
-        if not self.credit_system.use_credits(user_id, "login", login, total_found):
-            await msg.edit_text("<b>❌ Error using credits</b>", parse_mode='HTML')
-            return
-        
-        total_credits = self.credit_system.get_user_credits(user_id)
-        daily_credits = self.credit_system.get_daily_credits_left(user_id)
-        
-        response = (
-            f"<b>✅ LOGIN FOUND</b>\n\n"
-            f"<b>Login:</b> <code>{self.escape_html(login)}</code>\n"
-            f"<b>Results:</b> <code>{total_found}</code>\n"
-            f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-            f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-            f"<b>First results:</b>\n"
-            f"<pre>"
-        )
-        
-        for line in results[:5]:
-            response += f"{self.escape_html(line)}\n"
-        
-        response += "</pre>"
-        
-        await msg.edit_text(response, parse_mode='HTML')
+        query = ' '.join(context.args)
+        await self.perform_specific_search(update, user.id, 'login', query)
     
     async def pass_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        
-        if not self.credit_system.has_enough_credits(user_id):
-            await update.message.reply_text(
-                f"<b>❌ NO CREDITS</b>\n\n"
-                f"Your daily credits reset at {RESET_HOUR}:00",
-                parse_mode='HTML'
-            )
-            return
+        """Search by password"""
+        user = update.effective_user
         
         if not context.args:
-            await update.message.reply_text(
-                "<b>❌ Usage:</b> <code>/pass password123</code>",
-                parse_mode='HTML'
+            await update.message.reply_html(
+                "🔐 <b>Password Search</b>\n\n"
+                "Usage: <code>/pass [password]</code>\n\n"
+                "<i>Examples:</i>\n"
+                "<code>/pass 123456</code>\n"
+                "<code>/pass password123</code>\n"
+                "<code>/pass qwerty</code>"
             )
             return
         
-        password = context.args[0].lower()
-        msg = await update.message.reply_text(f"🔑 <b>Searching password...</b>", parse_mode='HTML')
-        
-        total_found, results = self.search_engine.search_password(password)
-        
-        if total_found == 0:
-            await msg.edit_text(
-                f"<b>❌ NOT FOUND</b>\n\n"
-                f"<b>Password:</b> <code>********</code>",
-                parse_mode='HTML'
-            )
-            return
-        
-        if not self.credit_system.use_credits(user_id, "password", password, total_found):
-            await msg.edit_text("<b>❌ Error using credits</b>", parse_mode='HTML')
-            return
-        
-        total_credits = self.credit_system.get_user_credits(user_id)
-        daily_credits = self.credit_system.get_daily_credits_left(user_id)
-        
-        response = (
-            f"<b>✅ PASSWORD FOUND</b>\n\n"
-            f"<b>Password search:</b> <code>********</code>\n"
-            f"<b>Results:</b> <code>{total_found}</code>\n"
-            f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-            f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-            f"<b>First results:</b>\n"
-            f"<pre>"
-        )
-        
-        for line in results[:5]:
-            line = line.replace(password, "***" + password[-3:] if len(password) > 3 else "***")
-            response += f"{self.escape_html(line)}\n"
-        
-        response += "</pre>"
-        
-        await msg.edit_text(response, parse_mode='HTML')
+        query = ' '.join(context.args)
+        await self.perform_specific_search(update, user.id, 'password', query)
     
     async def dni_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        
-        if not self.credit_system.has_enough_credits(user_id):
-            await update.message.reply_text(
-                f"<b>❌ NO CREDITS</b>\n\n"
-                f"Your daily credits reset at {RESET_HOUR}:00",
-                parse_mode='HTML'
-            )
-            return
+        """
+        Search for DNI:password combos ONLY - NO emails
+        Example: /dni google.com finds ONLY DNI:pass patterns
+        """
+        user = update.effective_user
         
         if not context.args:
-            await update.message.reply_text(
-                "<b>❌ Usage:</b> <code>/dni domain.com</code>\n\n"
-                "<b>Examples:</b>\n"
-                "<code>/dni gmail.com</code> - Find Spanish DNI combos from gmail.com\n"
-                "<code>/dni hotmail.com</code> - Find Spanish DNI combos from hotmail.com\n\n"
-                "<b>⚠️ Note:</b> Searches for Spanish DNI format (8 digits + optional letter)",
-                parse_mode='HTML'
+            await update.message.reply_html(
+                "🇪🇸 <b>DNI Search - ONLY DNI:password</b>\n\n"
+                "Usage: <code>/dni [domain]</code>\n\n"
+                "<i>Examples:</i>\n"
+                "<code>/dni google.com</code> - Find ONLY DNI:password patterns\n"
+                "<code>/dni gmail.com</code> - Find DNI:password from Gmail\n\n"
+                "<i>Searches for Spanish ID (DNI) with passwords</i>\n"
+                "<b>⚠️ Returns ONLY DNI:password (no emails)</b>"
             )
             return
         
-        domain = context.args[0].lower().strip()
-        msg = await update.message.reply_text(
-            f"🔍 <b>Searching DNI combos in {self.escape_html(domain)}...</b>\n"
-            f"<i>This may take a moment...</i>",
-            parse_mode='HTML'
-        )
-        
-        total_found, results = self.search_engine.search_dni_in_domain(domain)
-        
-        if total_found == 0:
-            await msg.edit_text(
-                f"<b>❌ NO DNI COMBOS FOUND</b>\n\n"
-                f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
-                f"<b>Files scanned:</b> <code>{self.search_engine.get_stats()['total_files']}</code>\n\n"
-                f"<i>No Spanish DNI combos found for this domain.</i>",
-                parse_mode='HTML'
-            )
-            return
-        
-        if not self.credit_system.use_credits(user_id, "dni_domain", domain, total_found):
-            await msg.edit_text("<b>❌ Error using credits</b>", parse_mode='HTML')
-            return
-        
-        total_credits = self.credit_system.get_user_credits(user_id)
-        daily_credits = self.credit_system.get_daily_credits_left(user_id)
-        
-        if total_found > 100:
-            txt_buffer = io.BytesIO()
-            content = "\n".join(results)
-            txt_buffer.write(content.encode('utf-8'))
-            txt_buffer.seek(0)
-            
-            filename = f"dni_combos_{domain.replace('.', '_')}.txt"
-            
-            await update.message.reply_document(
-                document=txt_buffer,
-                filename=filename,
-                caption=(
-                    f"<b>📁 DNI COMBOS FOUND</b>\n\n"
-                    f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
-                    f"<b>Total DNI combos:</b> <code>{total_found}</code>\n"
-                    f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-                    f"<b>Total credits:</b> <code>{total_credits}</code>"
-                ),
-                parse_mode='HTML'
-            )
-            
-            await msg.edit_text(
-                f"<b>✅ DNI COMBOS FOUND</b>\n\n"
-                f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
-                f"<b>Total DNI combos:</b> <code>{total_found}</code>\n"
-                f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-                f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-                f"<i>Results sent as file 📁</i>",
-                parse_mode='HTML'
-            )
-        else:
-            response = (
-                f"<b>✅ DNI COMBOS FOUND</b>\n\n"
-                f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
-                f"<b>Total DNI combos:</b> <code>{total_found}</code>\n"
-                f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-                f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-                f"<b>First {min(10, total_found)} combos:</b>\n"
-                f"<pre>"
-            )
-            
-            for line in results[:10]:
-                if len(line) > 80:
-                    line = line[:77] + "..."
-                response += f"{self.escape_html(line)}\n"
-            
-            response += "</pre>"
-            
-            if total_found > 10:
-                response += f"\n<b>... and {total_found-10} more DNI combos</b>"
-            
-            await msg.edit_text(response, parse_mode='HTML')
+        domain = ' '.join(context.args)
+        await self.perform_dni_search(update, user.id, domain)
+    
+    # ============================================================================
+    # USER COMMANDS (sin cambios)
+    # ============================================================================
     
     async def mycredits_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        total_credits = self.credit_system.get_user_credits(user_id)
-        daily_credits = self.credit_system.get_daily_credits_left(user_id)
+        """Show user credits"""
+        user = update.effective_user
+        total_credits = self.credit_system.get_user_credits(user.id)
+        daily_credits = self.credit_system.get_daily_credits_left(user.id)
         extra_credits = total_credits - daily_credits
-        user_info = self.credit_system.get_user_info(user_id)
+        user_info = self.credit_system.get_user_info(user.id)
         
-        now = datetime.now()
-        reset_time = dt_time(hour=RESET_HOUR, minute=0, second=0)
-        
-        if now.time() < reset_time:
-            next_reset = datetime.combine(now.date(), reset_time)
-        else:
-            next_reset = datetime.combine(now.date() + timedelta(days=1), reset_time)
-        
-        hours_to_reset = (next_reset - now).seconds // 3600
-        minutes_to_reset = ((next_reset - now).seconds % 3600) // 60
-        
-        response = (
-            f"<b>💰 YOUR CREDITS</b>\n\n"
-            f"👤 <b>User:</b> @{update.effective_user.username or update.effective_user.first_name}\n"
-            f"🆔 <b>ID:</b> <code>{user_id}</code>\n\n"
-            f"<b>💳 AVAILABLE CREDITS:</b>\n"
-            f"🆓 <b>Daily:</b> <code>{daily_credits}</code>/{MAX_FREE_CREDITS}\n"
-            f"💎 <b>Extra:</b> <code>{extra_credits}</code>\n"
-            f"🎯 <b>Total:</b> <code>{total_credits}</code>\n\n"
-            f"<b>⏰ NEXT RESET:</b>\n"
-            f"🔄 <b>Time:</b> {RESET_HOUR}:00\n"
-            f"⏳ <b>Time left:</b> {hours_to_reset}h {minutes_to_reset}m\n\n"
-            f"<b>📊 STATISTICS:</b>\n"
-            f"🔍 <b>Total searches:</b> <code>{user_info.get('total_searches', 0) if user_info else 0}</code>\n\n"
-            f"<b>💡 INFORMATION:</b>\n"
-            f"• Daily credits reset at {RESET_HOUR}:00\n"
-            f"• Extra credits are permanent\n"
-            f"• Contact {BOT_OWNER} for extra credits"
+        message = (
+            f"💰 <b>Your Credits</b>\n\n"
+            f"<b>Daily Credits:</b> {daily_credits}/2\n"
+            f"<b>Extra Credits:</b> {extra_credits}\n"
+            f"<b>Total Credits:</b> {total_credits}\n\n"
+            f"<b>Statistics:</b>\n"
+            f"• Total searches: {user_info.get('total_searches', 0) if user_info else 0}\n"
+            f"• Referrals: {user_info.get('referrals', 0) if user_info else 0}\n"
+            f"• Member since: {user_info.get('join_date', 'N/A')[:10] if user_info else 'N/A'}\n\n"
+            f"<i>Daily credits reset at midnight UTC</i>\n"
+            f"Use /referral to invite friends and get +1 credit each!"
         )
         
-        await update.message.reply_text(response, parse_mode='HTML')
+        await update.message.reply_html(message)
     
     async def mystats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        user_info = self.credit_system.get_user_info(user_id)
-        referral_stats = self.credit_system.get_referral_stats(user_id)
+        """Show user statistics"""
+        user = update.effective_user
+        user_info = self.credit_system.get_user_info(user.id)
         
         if not user_info:
-            await update.message.reply_text("❌ User not found")
+            await update.message.reply_html("❌ User not found in database")
             return
         
-        total_credits = self.credit_system.get_user_credits(user_id)
-        daily_credits = self.credit_system.get_daily_credits_left(user_id)
-        extra_credits = total_credits - daily_credits
-        
-        referrals_count = referral_stats.get('referrals_count', 0) if referral_stats else 0
-        total_referred = referral_stats.get('total_referred', 0) if referral_stats else 0
-        
-        response = (
-            f"<b>📊 YOUR STATISTICS</b>\n\n"
-            f"👤 <b>User:</b> @{update.effective_user.username or update.effective_user.first_name}\n"
-            f"🆔 <b>ID:</b> <code>{user_id}</code>\n"
-            f"📅 <b>Join date:</b> {user_info.get('join_date', 'N/A')}\n\n"
-            
-            f"<b>💰 CREDITS:</b>\n"
-            f"🆓 <b>Daily:</b> <code>{daily_credits}</code>/{MAX_FREE_CREDITS}\n"
-            f"💎 <b>Extra:</b> <code>{extra_credits}</code>\n"
-            f"🎯 <b>Total:</b> <code>{total_credits}</code>\n\n"
-            
-            f"<b>🔍 SEARCHES:</b>\n"
-            f"📈 <b>Total searches:</b> <code>{user_info.get('total_searches', 0)}</code>\n\n"
-            
-            f"<b>👥 REFERRALS:</b>\n"
-            f"🤝 <b>Referrals made:</b> <code>{referrals_count}</code>\n"
-            f"👥 <b>Total referred:</b> <code>{total_referred}</code>\n"
-            f"🎁 <b>Bonus per referral:</b> <code>+{REFERRAL_BONUS}</code> credits\n\n"
-            
-            f"<i>Use /referral to get your referral link!</i>"
+        message = (
+            f"📊 <b>Your Statistics</b>\n\n"
+            f"<b>Account Info:</b>\n"
+            f"• User ID: {user_info['user_id']}\n"
+            f"• Username: @{user_info['username'] or 'N/A'}\n"
+            f"• Name: {user_info['first_name']}\n"
+            f"• Joined: {user_info['join_date'][:10]}\n\n"
+            f"<b>Activity:</b>\n"
+            f"• Total searches: {user_info['total_searches']}\n"
+            f"• Successful referrals: {user_info['referrals']}\n\n"
+            f"<b>Current Credits:</b>\n"
+            f"• Daily: {user_info['daily_credits']}/2\n"
+            f"• Extra: {user_info['extra_credits']}\n"
+            f"• Total: {user_info['daily_credits'] + user_info['extra_credits']}"
         )
         
-        await update.message.reply_text(response, parse_mode='HTML')
+        await update.message.reply_html(message)
     
     async def referral_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        referral_stats = self.credit_system.get_referral_stats(user_id)
-        referral_link = self.credit_system.get_referral_link(user_id)
+        """Show referral info"""
+        user = update.effective_user
+        referral_info = self.credit_system.get_referral_info(user.id)
         
-        if not referral_stats:
-            await update.message.reply_text("❌ Error getting referral information")
+        if not referral_info:
+            await update.message.reply_html("❌ Could not generate referral info")
             return
         
-        referrals_count = referral_stats.get('referrals_count', 0)
-        referral_code = referral_stats.get('referral_code', 'N/A')
-        
-        response = (
-            f"<b>🤝 REFERRAL SYSTEM</b>\n\n"
-            f"<b>🎁 HOW IT WORKS:</b>\n"
-            f"• Share your referral link with friends\n"
-            f"• When they join using your link:\n"
-            f"  → You get: <b>+{REFERRAL_BONUS} credits</b>\n"
-            f"  → They get: <b>{MAX_FREE_CREDITS} daily credits</b>\n\n"
-            
-            f"<b>📊 YOUR STATS:</b>\n"
-            f"👥 <b>Referrals made:</b> <code>{referrals_count}</code>\n"
-            f"💰 <b>Total earned:</b> <code>{referrals_count * REFERRAL_BONUS}</code> credits\n"
-            f"🔑 <b>Your code:</b> <code>{referral_code}</code>\n\n"
-            
-            f"<b>🔗 YOUR REFERRAL LINK:</b>\n"
-            f"<code>{referral_link}</code>\n\n"
-            
-            f"<b>📝 HOW TO SHARE:</b>\n"
-            f"1. Copy the link above\n"
-            f"2. Share it with friends\n"
-            f"3. Earn credits when they join!\n\n"
-            
-            f"<i>Credits are added automatically when they use /start</i>"
+        message = (
+            f"🎯 <b>Referral System</b>\n\n"
+            f"<b>How it works:</b>\n"
+            f"1. Share your referral link\n"
+            f"2. When someone joins using your link\n"
+            f"3. You get <b>+1 credit</b>!\n"
+            f"4. They get 2 free credits\n\n"
+            f"<b>Your Referral Stats:</b>\n"
+            f"• Referrals: {referral_info['referrals_count']}\n"
+            f"• Your Code: <code>{referral_info['referral_code']}</code>\n\n"
+            f"<b>Your Referral Link:</b>\n"
+            f"<code>{referral_info['referral_link']}</code>\n\n"
+            f"<i>Share this link with friends to earn free credits!</i>"
         )
         
-        keyboard = [
-            [InlineKeyboardButton("📋 Copy Link", callback_data="copy_referral")],
-            [InlineKeyboardButton("💰 My Credits", callback_data="menu_credits")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(response, parse_mode='HTML', reply_markup=reply_markup)
+        await update.message.reply_html(message)
     
     async def price_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        response = (
-            f"<b>💰 PRICE INFORMATION</b>\n\n"
-            f"<b>🎯 FREE SYSTEM:</b>\n"
-            f"🆓 <b>{MAX_FREE_CREDITS} free daily credits</b>\n"
-            f"🔄 <b>Resets at:</b> {RESET_HOUR}:00\n"
-            f"👥 <b>Referral bonus:</b> +{REFERRAL_BONUS} credits per friend\n\n"
-            
-            f"<b>💎 EXTRA CREDITS:</b>\n"
-            f"• Contact {BOT_OWNER} for extra credits\n"
-            f"• Extra credits are permanent\n"
-            f"• They don't reset daily\n\n"
-            
-            f"<b>📊 CREDIT VALUES:</b>\n"
-            f"🔍 <b>1 credit</b> = <b>1 search</b>\n"
-            f"📁 <b>Results delivery:</b>\n"
-            f"  • <100 results → In message\n"
-            f"  • 100-10,000 → .txt file\n"
-            f"  • >10,000 → .zip file\n\n"
-            
-            f"<b>🎁 SPECIAL OFFERS:</b>\n"
-            f"• First-time users: {MAX_FREE_CREDITS} credits\n"
-            f"• Active users: Bonus credits\n"
-            f"• Bulk purchases: Discounts\n\n"
-            
-            f"<i>Contact {BOT_OWNER} for custom packages!</i>"
+        """Show pricing information"""
+        message = (
+            f"💰 <b>Pricing Information</b>\n\n"
+            f"<b>FREE PLAN:</b>\n"
+            f"• 2 free credits per day\n"
+            f"• +1 credit per referral\n"
+            f"• All search features\n\n"
+            f"<b>PREMIUM PLANS:</b>\n"
+            f"Contact {BOT_OWNER} for premium plans:\n"
+            f"• Unlimited searches\n"
+            f"• Priority support\n"
+            f"• Bulk search options\n\n"
+            f"<b>SUPPORT:</b>\n"
+            f"Contact {BOT_SUPPORT} for any questions or to purchase credits."
         )
         
-        keyboard = [
-            [InlineKeyboardButton("👥 Referral System", callback_data="menu_referral")],
-            [InlineKeyboardButton("💰 My Credits", callback_data="menu_credits")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(response, parse_mode='HTML', reply_markup=reply_markup)
+        await update.message.reply_html(message)
+    
+    # ============================================================================
+    # INFO COMMANDS (sin cambios)
+    # ============================================================================
     
     async def info_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        response = (
-            f"<b>📚 {BOT_NAME} - INFORMATION</b>\n\n"
-            f"<b>🚀 VERSION:</b> {BOT_VERSION}\n"
-            f"<b>👑 OWNER:</b> {BOT_OWNER}\n"
-            f"<b>📅 LAUNCHED:</b> 2024\n\n"
-            
-            f"<b>🔍 WHAT WE DO:</b>\n"
-            f"• Search credentials by domain\n"
-            f"• Search by email, login, password\n"
-            f"• Search Spanish DNI combos by domain\n"
-            f"• Local database with millions of records\n\n"
-            
-            f"<b>💰 CREDIT SYSTEM:</b>\n"
-            f"• {MAX_FREE_CREDITS} free daily credits\n"
-            f"• Referral system: +{REFERRAL_BONUS} credits\n"
-            f"• Extra credits available\n"
-            f"• 1 credit = 1 search\n\n"
-            
-            f"<b>📁 DATA FORMATS:</b>\n"
-            f"• email:password\n"
-            f"• url:email:password\n"
-            f"• login:password\n"
-            f"• email only\n\n"
-            
-            f"<b>⚙️ TECHNOLOGY:</b>\n"
-            f"• Local search engine\n"
-            f"• Fast indexing\n"
-            f"• Secure database\n"
-            f"• 24/7 availability\n\n"
-            
-            f"<i>For support contact {BOT_OWNER}</i>"
-        )
-        
-        await update.message.reply_text(response, parse_mode='HTML')
-    
-    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        help_text = (
-            f"<b>📚 {BOT_NAME} - COMPLETE HELP</b>\n\n"
-            
-            f"<b>🎯 FREE SYSTEM:</b>\n"
-            f"• Max {MAX_FREE_CREDITS} free credits\n"
-            f"• 1 credit = 1 search\n"
-            f"• Invite friends: +{REFERRAL_BONUS} credit per referral\n\n"
-            
-            f"<b>🔍 SEARCH COMMANDS:</b>\n"
-            f"<code>/search domain.com</code> - Search by domain\n"
-            f"<code>/email user@gmail.com</code> - Search by email\n"
-            f"<code>/login username</code> - Search by login\n"
-            f"<code>/pass password123</code> - Search by password\n"
-            f"<code>/dni domain.com</code> - Search Spanish DNI combos from domain\n\n"
-            
-            f"<b>📋 FORMATS FOR /search:</b>\n"
-            f"• email:password\n"
-            f"• url:email:password\n"
-            f"• login:password\n"
-            f"• email only\n\n"
-            
-            f"<b>💰 PERSONAL COMMANDS:</b>\n"
-            f"<code>/mycredits</code> - View your credits\n"
-            f"<code>/mystats</code> - Your statistics\n"
-            f"<code>/referral</code> - Your referral link\n"
-            f"<code>/price</code> - Price information\n\n"
-            
-            f"<b>📊 INFORMATION:</b>\n"
-            f"<code>/info</code> - Bot information\n"
-            f"<code>/help</code> - This help\n\n"
-            
-            f"<b>👑 ADMIN COMMANDS:</b>\n"
-            f"<code>/addcredits</code> - Add credits\n"
-            f"<code>/userinfo</code> - User information\n"
-            f"<code>/stats</code> - Statistics\n"
-            f"<code>/userslist</code> - List users\n"
-            f"<code>/broadcast</code> - Send to all users\n"
-            f"<code>/upload</code> - Upload ULP file\n"
-            f"<code>/uploadlarge</code> - Upload large files (part by part)\n"
-            f"<code>/splithelp</code> - Help for splitting files\n\n"
-            
-            f"<b>📁 RESULTS DELIVERY:</b>\n"
-            f"• <100 results → Message\n"
-            f"• 100-10,000 → .txt file\n"
-            f"• >10,000 → .zip file\n\n"
-            
-            f"<b>💡 TIPS:</b>\n"
-            f"• Use specific terms for better results\n"
-            f"• Invite friends to earn free credits\n"
-            f"• Contact {BOT_OWNER} for more credits\n\n"
-            
-            f"<i>Bot developed by {BOT_OWNER}</i>"
-        )
-        
-        await update.message.reply_text(help_text, parse_mode='HTML')
-    
-    # ==================== ADMIN COMMANDS ====================
-    
-    async def addcredits_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        
-        if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Admins only.")
-            return
-        
-        if len(context.args) < 2:
-            await update.message.reply_text(
-                "<b>❌ Usage:</b> <code>/addcredits user_id amount [daily/extra]</code>\n\n"
-                "<b>Examples:</b>\n"
-                "<code>/addcredits 123456789 5 daily</code>\n"
-                "<code>/addcredits 123456789 10 extra</code>\n\n"
-                "<b>Note:</b> 'daily' credits reset at midnight, 'extra' are permanent (default).",
-                parse_mode='HTML'
-            )
-            return
-        
-        try:
-            target_user = int(context.args[0])
-            amount = int(context.args[1])
-            credit_type = context.args[2] if len(context.args) > 2 else "extra"
-            
-            if credit_type not in ['daily', 'extra']:
-                credit_type = 'extra'
-            
-            success, message = self.credit_system.add_credits_to_user(target_user, amount, user_id, credit_type)
-            
-            if success:
-                await update.message.reply_text(
-                    f"<b>✅ CREDITS ADDED</b>\n\n"
-                    f"<b>User:</b> <code>{target_user}</code>\n"
-                    f"<b>Amount:</b> <code>{amount}</code> {credit_type} credits\n"
-                    f"<b>Type:</b> {'🆓 Daily (will reset)' if credit_type == 'daily' else '💎 Extra (permanent)'}\n"
-                    f"<b>Admin:</b> @{update.effective_user.username}",
-                    parse_mode='HTML'
-                )
-            else:
-                await update.message.reply_text(f"❌ {message}")
-                
-        except ValueError:
-            await update.message.reply_text("❌ Error: Invalid ID or amount")
-        except Exception as e:
-            await update.message.reply_text(f"❌ Error: {str(e)}")
-    
-    async def userinfo_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        
-        if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Admins only.")
-            return
-        
-        if not context.args:
-            await update.message.reply_text(
-                "<b>❌ Usage:</b> <code>/userinfo user_id</code>\n"
-                "<b>Example:</b> <code>/userinfo 123456789</code>",
-                parse_mode='HTML'
-            )
-            return
-        
-        try:
-            target_user = int(context.args[0])
-            user_info = self.credit_system.get_user_info(target_user)
-            
-            if not user_info:
-                await update.message.reply_text("❌ User not found")
-                return
-            
-            total_credits = user_info['daily_credits'] + user_info['extra_credits']
-            referral_stats = self.credit_system.get_referral_stats(target_user)
-            referrals_count = referral_stats.get('referrals_count', 0) if referral_stats else 0
-            
-            response = (
-                f"<b>👤 USER INFORMATION</b>\n\n"
-                f"<b>Basic Info:</b>\n"
-                f"🆔 <b>ID:</b> <code>{user_info['user_id']}</code>\n"
-                f"👤 <b>Username:</b> @{user_info['username'] or 'N/A'}\n"
-                f"📛 <b>Name:</b> {user_info['first_name'] or 'N/A'}\n"
-                f"📅 <b>Join date:</b> {user_info['join_date']}\n"
-                f"🔄 <b>Last reset:</b> {user_info.get('last_reset', 'N/A')}\n\n"
-                
-                f"<b>💰 Credits:</b>\n"
-                f"🆓 <b>Daily:</b> <code>{user_info['daily_credits']}</code>\n"
-                f"💎 <b>Extra:</b> <code>{user_info['extra_credits']}</code>\n"
-                f"🎯 <b>Total:</b> <code>{total_credits}</code>\n\n"
-                
-                f"<b>🔍 Activity:</b>\n"
-                f"📈 <b>Searches:</b> <code>{user_info['total_searches']}</code>\n"
-                f"👥 <b>Referrals:</b> <code>{referrals_count}</code>\n"
-                f"🔑 <b>Referral code:</b> <code>{user_info.get('referral_code', 'N/A')}</code>\n"
-                f"🤝 <b>Referred by:</b> <code>{user_info.get('referred_by', 'No one')}</code>\n\n"
-                
-                f"<b>💡 Admin Actions:</b>\n"
-                f"Add credits: <code>/addcredits {target_user} 10</code>"
-            )
-            
-            await update.message.reply_text(response, parse_mode='HTML')
-            
-        except ValueError:
-            await update.message.reply_text("❌ Error: Invalid user ID")
-        except Exception as e:
-            await update.message.reply_text(f"❌ Error: {str(e)}")
-    
-    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
-        
-        if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Admins only.")
-            return
-        
-        bot_stats = self.credit_system.get_bot_stats()
+        """Show bot information"""
+        stats = self.credit_system.get_bot_stats()
         engine_stats = self.search_engine.get_stats()
         
-        total_lines = 0
-        for file_path in glob.glob(os.path.join(DATA_DIR, "*.txt")):
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    total_lines += sum(1 for _ in f)
-            except:
-                pass
-        
-        response = (
-            f"<b>📊 BOT STATISTICS</b>\n\n"
-            f"👥 <b>Users:</b> <code>{bot_stats['total_users']}</code>\n"
-            f"🔍 <b>Total searches:</b> <code>{bot_stats['total_searches']}</code>\n"
-            f"💰 <b>Total credits:</b> <code>{bot_stats['total_credits']}</code>\n"
-            f"👥 <b>Total referrals:</b> <code>{bot_stats.get('total_referrals', 0)}</code>\n"
-            f"📁 <b>Files in DB:</b> <code>{engine_stats['total_files']}</code>\n"
-            f"📊 <b>Total lines:</b> <code>{total_lines:,}</code>\n"
-            f"💾 <b>Database size:</b> <code>{engine_stats['total_size_gb']:.2f} GB</code>\n"
-            f"🔄 <b>Daily reset:</b> {RESET_HOUR}:00\n\n"
-            f"🤖 <b>Version:</b> {BOT_VERSION}\n"
-            f"👑 <b>Owner:</b> {BOT_OWNER}"
+        message = (
+            f"📚 <b>{BOT_NAME} - Information</b>\n\n"
+            f"<b>Version:</b> {BOT_VERSION}\n"
+            f"<b>Owner:</b> {BOT_OWNER}\n"
+            f"<b>Support:</b> {BOT_SUPPORT}\n\n"
+            f"<b>Database Statistics:</b>\n"
+            f"• Total files: {engine_stats['total_files']:,}\n"
+            f"• Total lines: {engine_stats['total_lines']:,}\n"
+            f"• Database size: {engine_stats['total_size_mb']:,.1f} MB\n\n"
+            f"<b>User Statistics:</b>\n"
+            f"• Total users: {stats['total_users']:,}\n"
+            f"• Total searches: {stats['total_searches']:,}\n"
+            f"• Total referrals: {stats['total_referrals']:,}\n\n"
+            f"<b>Free Credits System:</b>\n"
+            f"• 2 free credits daily\n"
+            f"• +1 credit per referral\n"
+            f"• Resets at midnight UTC\n\n"
+            f"Use /help for all available commands."
         )
         
-        await update.message.reply_text(response, parse_mode='HTML')
+        await update.message.reply_html(message)
+    
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show complete help"""
+        help_text = (
+            f"📚 <b>{BOT_NAME} - COMPLETE HELP</b>\n\n"
+            
+            "<b>🎯 FREE SYSTEM:</b>\n"
+            "• Maximum 2 free credits\n"
+            "• 1 credit = 1 search\n"
+            "• Invite friends: +1 credit per referral\n\n"
+            
+            "<b>🔍 SEARCH COMMANDS:</b>\n"
+            "/search <domain> - Search by domain (choose format)\n"
+            "/email <email> - Search by email\n"
+            "/login <username> - Search by login\n"
+            "/pass <password> - Search by password\n"
+            "/dni <domain> - Find DNI:password ONLY (no emails)\n\n"
+            
+            "<b>📋 FORMATS FOR /search:</b>\n"
+            "• Email:Pass Only - Clean format (NO URLs)\n"
+            "• Full Lines - Complete lines with URLs\n\n"
+            
+            "<b>💰 PERSONAL COMMANDS:</b>\n"
+            "/mycredits - Check your credits\n"
+            "/mystats - Your statistics\n"
+            "/referral - Your referral link\n"
+            "/price - Pricing information\n\n"
+            
+            "<b>📊 INFORMATION:</b>\n"
+            "/info - Bot information\n"
+            "/help - This help message\n"
+            "/stats - Bot statistics (admin)\n\n"
+            
+            "<b>👑 ADMIN COMMANDS:</b>\n"
+            "/stats - Bot statistics\n"
+            "/userslist - List all users\n"
+            "/addcredits - Add credits to user\n"
+            "/userinfo - User information\n"
+            "/broadcast - Send to all users\n"
+            "/upload - Upload ULP file\n\n"
+            
+            "<b>📁 RESULT DELIVERY:</b>\n"
+            "• <b>ALL</b> results in ONE file\n"
+            "• <b>NO LIMIT</b> on results\n"
+            "• Small files → .txt\n"
+            "• Large files → .zip\n\n"
+            
+            "<b>💡 TIPS:</b>\n"
+            "• Use specific terms for better results\n"
+            "• Invite friends to earn free credits\n"
+            f"• Contact {BOT_OWNER} for more credits\n\n"
+            
+            f"<b>Bot developed by {BOT_OWNER}</b>"
+        )
+        
+        await update.message.reply_html(help_text)
+    
+    # ============================================================================
+    # ADMIN COMMANDS (sin cambios)
+    # ============================================================================
+    
+    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show bot statistics (admin only)"""
+        user = update.effective_user
+        
+        if user.id not in ADMIN_IDS:
+            await update.message.reply_html("❌ This command is for admins only")
+            return
+        
+        stats = self.credit_system.get_bot_stats()
+        engine_stats = self.search_engine.get_stats()
+        
+        today = datetime.now().date()
+        
+        with self.credit_system.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) as count FROM transactions WHERE type = 'search_used' AND DATE(date) = DATE(?)",
+                (today,)
+            )
+            today_searches = cursor.fetchone()['count']
+        
+        message = (
+            f"📊 <b>Admin Statistics</b>\n\n"
+            f"<b>Users:</b> {stats['total_users']:,}\n"
+            f"<b>Total Searches:</b> {stats['total_searches']:,}\n"
+            f"<b>Today's Searches:</b> {today_searches:,}\n"
+            f"<b>Total Credits:</b> {stats['total_credits']:,}\n"
+            f"<b>Total Referrals:</b> {stats['total_referrals']:,}\n\n"
+            
+            f"<b>Database:</b>\n"
+            f"• Files: {engine_stats['total_files']:,}\n"
+            f"• Lines: {engine_stats['total_lines']:,}\n"
+            f"• Size: {engine_stats['total_size_mb']:,.1f} MB\n"
+        )
+        
+        await update.message.reply_html(message)
     
     async def userslist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
+        """List all users (admin only)"""
+        user = update.effective_user
         
-        if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Admins only.")
+        if user.id not in ADMIN_IDS:
+            await update.message.reply_html("❌ This command is for admins only")
             return
         
         users = self.credit_system.get_all_users(limit=20)
         
         if not users:
-            await update.message.reply_text("📭 No registered users.")
+            await update.message.reply_html("📭 No users found in database")
             return
         
-        response = "<b>📋 REGISTERED USERS</b>\n\n"
+        message = "<b>👥 Users List (Last 20)</b>\n\n"
         
-        for i, user in enumerate(users, 1):
-            username = f"@{user['username']}" if user['username'] else user['first_name']
-            daily = user['daily_credits']
-            extra = user['extra_credits']
-            searches = user['total_searches']
-            response += f"{i}. {self.escape_html(username)} (<code>{user['user_id']}</code>) - 🆓{daily} 💎{extra} 🔍{searches}\n"
+        for i, user_data in enumerate(users, 1):
+            user_id = user_data['user_id']
+            username = user_data['username'] or "No username"
+            first_name = user_data['first_name']
+            searches = user_data['total_searches']
+            credits = user_data['daily_credits'] + user_data['extra_credits']
+            join_date = user_data['join_date'][:10]
+            
+            message += (
+                f"{i}. <b>{first_name}</b> (@{username})\n"
+                f"   ID: {user_id} | Searches: {searches}\n"
+                f"   Credits: {credits} | Joined: {join_date}\n\n"
+            )
         
-        await update.message.reply_text(response, parse_mode='HTML')
+        await update.message.reply_html(message)
     
-    async def broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user_id = update.effective_user.id
+    async def userinfo_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Get user info by ID or username (admin only)"""
+        user = update.effective_user
         
-        if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Admins only.")
+        if user.id not in ADMIN_IDS:
+            await update.message.reply_html("❌ This command is for admins only")
             return
         
         if not context.args:
-            await update.message.reply_text(
-                "<b>❌ Usage:</b> <code>/broadcast your message here</code>\n\n"
-                "<b>Example:</b>\n"
-                "<code>/broadcast New update available! Check /help</code>",
-                parse_mode='HTML'
+            await update.message.reply_html(
+                "👤 <b>User Info</b>\n\n"
+                "Usage: <code>/userinfo [user_id or username]</code>\n\n"
+                "<i>Examples:</i>\n"
+                "<code>/userinfo 123456789</code>\n"
+                "<code>/userinfo @username</code>"
             )
             return
         
-        message = " ".join(context.args)
-        msg = await update.message.reply_text("📢 <b>Starting broadcast...</b>", parse_mode='HTML')
+        identifier = context.args[0].strip()
         
-        users = self.credit_system.get_all_users(limit=1000)
-        total_users = len(users)
-        successful = 0
-        failed = 0
+        if identifier.startswith('@'):
+            identifier = identifier[1:]
+            user_data = self.credit_system.get_user_by_username(identifier)
+        else:
+            try:
+                user_id = int(identifier)
+                user_data = self.credit_system.get_user_info(user_id)
+            except ValueError:
+                await update.message.reply_html("❌ Invalid user ID")
+                return
         
-        await msg.edit_text(f"📢 <b>Broadcasting to {total_users} users...</b>", parse_mode='HTML')
+        if not user_data:
+            await update.message.reply_html("❌ User not found")
+            return
         
-        for user in users:
+        total_credits = user_data['daily_credits'] + user_data['extra_credits']
+        
+        message = (
+            f"👤 <b>User Information</b>\n\n"
+            f"<b>User ID:</b> {user_data['user_id']}\n"
+            f"<b>Username:</b> @{user_data['username'] or 'N/A'}\n"
+            f"<b>First Name:</b> {user_data['first_name']}\n"
+            f"<b>Join Date:</b> {user_data['join_date']}\n\n"
+            f"<b>Credits:</b>\n"
+            f"• Daily: {user_data['daily_credits']}/2\n"
+            f"• Extra: {user_data['extra_credits']}\n"
+            f"• Total: {total_credits}\n\n"
+            f"<b>Statistics:</b>\n"
+            f"• Total searches: {user_data['total_searches']}\n"
+            f"• Referrals: {user_data['referrals']}\n"
+            f"• Referral Code: {user_data['referral_code']}\n"
+            f"• Referred by: {user_data['referred_by'] or 'No one'}\n\n"
+            f"<b>Last Reset:</b> {user_data.get('last_reset', 'N/A')}"
+        )
+        
+        await update.message.reply_html(message)
+    
+    async def addcredits_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Add credits to user (admin only)"""
+        user = update.effective_user
+        
+        if user.id not in ADMIN_IDS:
+            await update.message.reply_html("❌ This command is for admins only")
+            return
+        
+        if len(context.args) < 2:
+            await update.message.reply_html(
+                "➕ <b>Add Credits</b>\n\n"
+                "Usage: <code>/addcredits [user_id] [amount] [type]</code>\n\n"
+                "<i>Examples:</i>\n"
+                "<code>/addcredits 123456789 10 extra</code>\n"
+                "<code>/addcredits 123456789 5 daily</code>\n\n"
+                "<i>Type: 'extra' or 'daily' (default: extra)</i>"
+            )
+            return
+        
+        try:
+            user_id = int(context.args[0])
+            amount = int(context.args[1])
+            credit_type = context.args[2] if len(context.args) > 2 else 'extra'
+            
+            if credit_type not in ['extra', 'daily']:
+                credit_type = 'extra'
+            
+            success, message = self.credit_system.add_credits_to_user(user_id, amount, user.id, credit_type)
+            
+            await update.message.reply_html(message)
+        except ValueError:
+            await update.message.reply_html("❌ Invalid user ID or amount")
+        except Exception as e:
+            await update.message.reply_html(f"❌ Error: {str(e)}")
+    
+    async def broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Send message to all users (admin only)"""
+        user = update.effective_user
+        
+        if user.id not in ADMIN_IDS:
+            await update.message.reply_html("❌ This command is for admins only")
+            return
+        
+        if not context.args:
+            await update.message.reply_html(
+                "📢 <b>Broadcast Message</b>\n\n"
+                "Usage: <code>/broadcast [message]</code>\n\n"
+                "<i>Example:</i>\n"
+                "<code>/broadcast Hello everyone! New features added!</code>"
+            )
+            return
+        
+        message = ' '.join(context.args)
+        users = self.credit_system.get_all_users()
+        
+        if not users:
+            await update.message.reply_html("📭 No users to broadcast to")
+            return
+        
+        sent_count = 0
+        failed_count = 0
+        
+        await update.message.reply_html(f"📢 Starting broadcast to {len(users)} users...")
+        
+        for user_data in users:
             try:
                 await context.bot.send_message(
-                    chat_id=user['user_id'],
-                    text=f"📢 <b>ANNOUNCEMENT FROM {BOT_OWNER}</b>\n\n{message}\n\n<i>Bot: {BOT_NAME}</i>",
+                    chat_id=user_data['user_id'],
+                    text=f"📢 <b>Broadcast from {BOT_NAME}</b>\n\n{message}\n\n<i>Bot Owner: {BOT_OWNER}</i>",
                     parse_mode='HTML'
                 )
-                successful += 1
+                sent_count += 1
             except Exception as e:
-                failed += 1
-                logger.error(f"Failed to send to {user['user_id']}: {e}")
+                failed_count += 1
             
-            if (successful + failed) % 10 == 0:
-                await msg.edit_text(
-                    f"📢 <b>Broadcast Progress:</b>\n"
-                    f"✅ Sent: <code>{successful}</code>\n"
-                    f"❌ Failed: <code>{failed}</code>\n"
-                    f"📊 Total: <code>{successful + failed}/{total_users}</code>",
-                    parse_mode='HTML'
-                )
+            await asyncio.sleep(0.1)
         
-        with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO broadcasts (admin_id, message, sent_to, failed_to)
-                VALUES (?, ?, ?, ?)
-            ''', (user_id, message, successful, failed))
-            conn.commit()
-        
-        await msg.edit_text(
-            f"✅ <b>BROADCAST COMPLETED</b>\n\n"
-            f"📊 <b>Statistics:</b>\n"
-            f"✅ <b>Successful:</b> <code>{successful}</code>\n"
-            f"❌ <b>Failed:</b> <code>{failed}</code>\n"
-            f"👥 <b>Total users:</b> <code>{total_users}</code>\n\n"
-            f"<i>Message saved to database.</i>",
-            parse_mode='HTML'
+        await update.message.reply_html(
+            f"✅ <b>Broadcast Complete</b>\n\n"
+            f"• Total users: {len(users)}\n"
+            f"• Successfully sent: {sent_count}\n"
+            f"• Failed: {failed_count}"
         )
     
-    async def handle_large_file_upload(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle file uploads - NO SIZE CHECK VERSION"""
-        user_id = update.effective_user.id
+    async def upload_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Upload ULP file (admin only)"""
+        user = update.effective_user
         
-        if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Admins only.")
+        if user.id not in ADMIN_IDS:
+            await update.message.reply_html("❌ This command is for admins only")
             return
         
         if not update.message.document:
-            await update.message.reply_text(
-                "<b>📤 UPLOAD FILES (NO SIZE LIMIT)</b>\n\n"
-                "<b>⚠️ WARNING:</b> Telegram may reject very large files\n\n"
-                "<b>Supported formats:</b>\n"
-                "• .txt (text files)\n"
-                "• .zip, .7z, .rar (compressed)\n\n"
-                "<i>Send file directly to upload...</i>",
-                parse_mode='HTML'
+            await update.message.reply_html(
+                "📁 <b>Upload ULP File</b>\n\n"
+                "Send a .txt file with ULP data.\n"
+                "The file will be added to the search database."
             )
             return
         
         document = update.message.document
-        file_ext = os.path.splitext(document.file_name)[1].lower()
         
-        if file_ext not in ALLOWED_EXTENSIONS:
-            await update.message.reply_text(
-                f"❌ Unsupported format: {file_ext}\n"
-                f"✅ Supported: .txt, .zip, .7z, .rar, .gz, .tar"
-            )
+        if not document.file_name.endswith('.txt'):
+            await update.message.reply_html("❌ Only .txt files are accepted")
             return
         
-        # NO SIZE CHECK - Telegram will fail if too big
-        status_msg = await update.message.reply_text(
-            f"📥 <b>ATTEMPTING UPLOAD...</b>\n\n"
-            f"<b>File:</b> <code>{self.escape_html(document.file_name)}</code>\n"
-            f"<b>Type:</b> {file_ext}\n"
-            f"<i>Trying to download from Telegram...</i>",
+        try:
+            await update.message.reply_html("📥 Downloading file...")
+            
+            file = await context.bot.get_file(document.file_id)
+            temp_path = os.path.join(UPLOAD_DIR, document.file_name)
+            
+            await file.download_to_drive(temp_path)
+            
+            success, result = self.search_engine.add_data_file(temp_path)
+            
+            if success:
+                stats = self.search_engine.get_stats()
+                await update.message.reply_html(
+                    f"✅ <b>File Uploaded Successfully</b>\n\n"
+                    f"<b>File:</b> {result}\n"
+                    f"<b>Total files now:</b> {stats['total_files']:,}\n"
+                    f"<b>Total lines:</b> {stats['total_lines']:,}\n\n"
+                    f"Database reloaded and ready for searches."
+                )
+            else:
+                await update.message.reply_html(f"❌ Upload failed: {result}")
+            
+            os.remove(temp_path)
+        except Exception as e:
+            await update.message.reply_html(f"❌ Upload error: {str(e)}")
+    
+    # ============================================================================
+    # SEARCH FUNCTIONALITY - FIXED: ALL RESULTS, NO LIMITS
+    # ============================================================================
+    
+    async def perform_search_with_format(self, update: Update, user_id: int, query: str, format_type: str):
+        """Perform search and send ALL results in ONE file - NO LIMITS"""
+        if not self.credit_system.has_enough_credits(user_id):
+            await self.send_no_credits_message(update, user_id)
+            return
+        
+        query_msg = await update.callback_query.edit_message_text(
+            f"🔍 Searching: <code>{self.escape_html(query)}</code>\n"
+            f"📋 Format: {format_type.replace('_', ' ').title()}\n"
+            f"⏳ Collecting ALL results...",
             parse_mode='HTML'
         )
         
         try:
-            # Try to download - Telegram will fail if file is too big
-            file = await document.get_file()
+            if format_type == 'clean':
+                count, results = self.search_engine.search_clean_email_pass_no_url(query)
+                result_type = "clean email:password pairs"
+                description = "Email:Pass Only (NO URLs)"
+            else:  # format_type == 'full'
+                count, results = self.search_engine.search_all_formats(query)
+                result_type = "full lines"
+                description = "Complete database entries (with URLs)"
             
-            # Create temp directory
-            upload_id = f"{user_id}_{int(time.time())}"
-            temp_dir = os.path.join(UPLOAD_TEMP_DIR, upload_id)
-            os.makedirs(temp_dir, exist_ok=True)
+            logger.info(f"📊 Found {count:,} results for '{query}' with format '{format_type}'")
             
-            temp_path = os.path.join(temp_dir, document.file_name)
+            success = self.credit_system.use_credits(user_id, format_type, query, count)
             
-            # Download file
-            await file.download_to_drive(temp_path)
+            if not success:
+                await query_msg.edit_text("❌ Error using credits")
+                return
             
-            actual_size = os.path.getsize(temp_path)
+            daily_credits = self.credit_system.get_daily_credits_left(user_id)
             
-            await status_msg.edit_text(
-                f"✅ <b>DOWNLOAD SUCCESSFUL!</b>\n\n"
-                f"<b>File:</b> <code>{self.escape_html(document.file_name)}</code>\n"
-                f"<b>Size:</b> {actual_size/(1024**2):.2f} MB\n"
-                f"<b>Status:</b> Processing file...",
-                parse_mode='HTML'
+            if count == 0:
+                await query_msg.edit_text(
+                    f"🔍 <b>Search Results</b>\n\n"
+                    f"<b>Query:</b> <code>{self.escape_html(query)}</code>\n"
+                    f"<b>Format:</b> {format_type.replace('_', ' ').title()}\n"
+                    f"<b>Results:</b> 0\n\n"
+                    f"No results found.\n\n"
+                    f"<i>Daily credits remaining: {daily_credits}/2</i>"
+                )
+                return
+            
+            await query_msg.edit_text(
+                f"✅ Found: {count:,} results\n"
+                f"📁 Creating file with ALL results...\n"
+                f"⏳ Please wait..."
             )
             
-            # Process file
-            await self._process_upload_background(temp_path, document.file_name, user_id, status_msg)
+            # Create file with ALL results
+            results_text = "\n".join(results)
+            file_content = f"""SEARCH RESULTS - {BOT_NAME}
+Query: {query}
+Format: {description}
+Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Total Results: {count:,}
+
+{results_text}"""
             
-        except Exception as e:
-            error_msg = str(e)
+            file_size_bytes = len(file_content.encode('utf-8'))
+            file_size_mb = file_size_bytes / (1024 * 1024)
             
-            # Check if it's a size error from Telegram
-            if "too big" in error_msg.lower() or "400" in error_msg or "413" in error_msg:
-                await status_msg.edit_text(
-                    f"❌ <b>TELEGRAM REJECTED FILE</b>\n\n"
-                    f"<b>File:</b> <code>{self.escape_html(document.file_name)}</code>\n"
-                    f"<b>Reason:</b> File too large for Telegram API\n\n"
-                    f"<b>🔧 SOLUTIONS:</b>\n"
-                    f"1. <b>Compress with 7zip</b> (38MB → ~4MB)\n"
-                    f"2. <b>Split file</b> into smaller parts\n"
-                    f"3. <b>Use .7z format</b> for better compression\n\n"
-                    f"<i>Even if we ignore size check, Telegram API has limits!</i>",
+            logger.info(f"📊 File size: {file_size_mb:.2f} MB ({file_size_bytes:,} bytes) for {count:,} results")
+            
+            if file_size_mb <= 45:
+                file_obj = io.BytesIO(file_content.encode('utf-8'))
+                filename = f"{query.replace('@', '_at_').replace('.', '_dot_')}_{format_type}_{count}_results.txt"
+                file_obj.name = filename
+                
+                await update.callback_query.message.reply_document(
+                    document=file_obj,
+                    caption=(
+                        f"✅ <b>SEARCH COMPLETED</b>\n\n"
+                        f"<b>Query:</b> {query}\n"
+                        f"<b>Results:</b> {count:,}\n"
+                        f"<b>Format:</b> {description}\n"
+                        f"<b>Daily credits left:</b> {daily_credits}/2\n"
+                        f"<b>Total credits:</b> {self.credit_system.get_user_credits(user_id)}\n\n"
+                        f"<i>ALL results in one file</i>"
+                    ),
                     parse_mode='HTML'
                 )
+                
+                await query_msg.delete()
             else:
-                await status_msg.edit_text(
-                    f"❌ <b>UPLOAD FAILED</b>\n\n"
-                    f"<b>Error:</b> {error_msg[:200]}",
+                await query_msg.edit_text(
+                    f"📦 File is large ({file_size_mb:.1f} MB)\n"
+                    f"Creating ZIP archive with ALL results..."
+                )
+                
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    # Split into multiple files inside ZIP if needed
+                    max_lines_per_file = 1000000  # ~20-30MB per file
+                    
+                    if count <= max_lines_per_file:
+                        # Single file inside ZIP
+                        zip_file.writestr(f"{query}_ALL_RESULTS.txt", file_content)
+                    else:
+                        # Multiple files inside ZIP
+                        total_files = (count + max_lines_per_file - 1) // max_lines_per_file
+                        for i in range(total_files):
+                            start_idx = i * max_lines_per_file
+                            end_idx = min((i + 1) * max_lines_per_file, count)
+                            chunk = results[start_idx:end_idx]
+                            chunk_text = "\n".join(chunk)
+                            
+                            chunk_content = f"""SEARCH RESULTS - {BOT_NAME}
+Query: {query}
+Format: {description}
+File: {i+1}/{total_files}
+Results in this file: {len(chunk):,}
+Total Results: {count:,}
+Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+{chunk_text}"""
+                            
+                            zip_file.writestr(f"{query}_part{i+1}.txt", chunk_content)
+                
+                zip_buffer.seek(0)
+                zip_filename = f"{query}_ALL_RESULTS_{count}.zip"
+                zip_buffer.name = zip_filename
+                
+                await update.callback_query.message.reply_document(
+                    document=zip_buffer,
+                    caption=(
+                        f"✅ <b>SEARCH COMPLETED</b>\n\n"
+                        f"<b>Query:</b> {query}\n"
+                        f"<b>Results:</b> {count:,}\n"
+                        f"<b>File size:</b> {file_size_mb:.1f} MB\n"
+                        f"<b>Daily credits left:</b> {daily_credits}/2\n"
+                        f"<b>Total credits:</b> {self.credit_system.get_user_credits(user_id)}\n\n"
+                        f"<i>ALL results in ZIP file (too large for Telegram)</i>"
+                    ),
                     parse_mode='HTML'
                 )
+                
+                await query_msg.delete()
+                
+        except Exception as e:
+            logger.error(f"Search error: {e}")
+            await query_msg.edit_text(f"❌ Error: {str(e)}")
     
-    async def _process_upload_background(self, file_path: str, filename: str, user_id: int, status_msg):
-        """Process uploaded file in background"""
-        
-        def process_file():
-            try:
-                process_id = f"proc_{int(time.time())}"
-                process_dir = os.path.join(PROCESSING_DIR, process_id)
-                os.makedirs(process_dir, exist_ok=True)
-                
-                result = {
-                    'filename': filename,
-                    'original_size_mb': os.path.getsize(file_path) / (1024**2),
-                    'processed_lines': 0,
-                    'unique_lines': 0,
-                    'processing_time': 0,
-                    'output_file': None
-                }
-                
-                start_time = time.time()
-                file_ext = os.path.splitext(file_path)[1].lower()
-                
-                if file_ext in COMPRESSED_EXTENSIONS:
-                    extracted_file = self.file_processor.process_compressed_file(file_path, process_dir)
-                    if extracted_file:
-                        stats = self.file_processor.process_large_txt_file(extracted_file, process_dir)
-                        result.update(stats)
-                        result['output_file'] = stats['output_file']
-                    else:
-                        raise Exception("Failed to extract compressed file")
-                else:
-                    stats = self.file_processor.process_large_txt_file(file_path, process_dir)
-                    result.update(stats)
-                    result['output_file'] = stats['output_file']
-                
-                if result['output_file'] and os.path.exists(result['output_file']):
-                    final_filename = f"db_{int(time.time())}_{filename}"
-                    final_path = os.path.join(DATA_DIR, final_filename)
-                    shutil.move(result['output_file'], final_path)
-                    
-                    success, message = self.search_engine.add_data_file(final_path)
-                    if not success:
-                        raise Exception(f"Failed to add to search engine: {message}")
-                    
-                    result['final_path'] = final_path
-                    result['processing_time'] = time.time() - start_time
-                
-                return result
-            
-            except Exception as e:
-                logger.error(f"Background processing error: {e}")
-                return {'error': str(e)}
-            finally:
-                try:
-                    temp_dir = os.path.dirname(file_path)
-                    if os.path.exists(temp_dir):
-                        shutil.rmtree(temp_dir)
-                except:
-                    pass
-        
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(thread_executor, process_file)
-        
-        if 'error' in result:
-            await status_msg.edit_text(
-                f"❌ <b>PROCESSING FAILED</b>\n\n"
-                f"<b>File:</b> <code>{self.escape_html(filename)}</code>\n"
-                f"<b>Error:</b> {result['error'][:200]}",
-                parse_mode='HTML'
-            )
-        else:
-            stats = self.search_engine.get_stats()
-            await status_msg.edit_text(
-                f"✅ <b>FILE PROCESSED SUCCESSFULLY</b>\n\n"
-                f"<b>File:</b> <code>{self.escape_html(filename)}</code>\n"
-                f"<b>Original size:</b> {result['original_size_mb']:.2f} MB\n"
-                f"<b>Processing time:</b> {result['processing_time']:.1f} seconds\n"
-                f"<b>Lines processed:</b> {result.get('lines_processed', 0):,}\n"
-                f"<b>Valid lines added:</b> {result.get('valid_lines', 0):,}\n"
-                f"<b>Total files in DB:</b> {stats['total_files']}\n"
-                f"<b>Database size:</b> {stats['total_size_gb']:.2f} GB\n\n"
-                f"<b>✅ Ready for searches!</b>",
-                parse_mode='HTML'
-            )
-    
-    async def upload_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Show upload information"""
-        user_id = update.effective_user.id
-        
-        if user_id not in ADMIN_IDS:
-            await update.message.reply_text("❌ Admins only.")
+    async def perform_specific_search(self, update: Update, user_id: int, search_type: str, query: str):
+        """Perform specific search (email, login, password) - ALL RESULTS"""
+        if not self.credit_system.has_enough_credits(user_id):
+            await self.send_no_credits_message(update, user_id)
             return
         
-        stats = self.search_engine.get_stats()
-        
-        response = (
-            f"<b>📤 FILE UPLOAD SYSTEM (NO SIZE LIMITS)</b>\n\n"
-            f"<b>📁 Current Database:</b>\n"
-            f"• Files: <code>{stats['total_files']}</code>\n"
-            f"• Size: <code>{stats['total_size_gb']:.2f}</code> GB\n\n"
-            
-            f"<b>📦 Supported Formats:</b>\n"
-            f"• .txt (plain text)\n"
-            f"• .zip, .rar, .7z (compressed)\n\n"
-            
-            f"<b>⚠️ IMPORTANT:</b>\n"
-            f"• Telegram API may reject files > 20MB\n"
-            f"• Compress large files with 7zip\n"
-            f"• Use .7z format for best compression\n\n"
-            
-            f"<b>📊 System Status:</b>\n"
+        msg = await update.message.reply_html(
+            f"🔍 Searching for: <code>{self.escape_html(query)}</code>\n"
+            f"Type: {search_type.capitalize()}\n"
+            f"⏳ Collecting ALL results...",
+            parse_mode='HTML'
         )
         
         try:
-            total, used, free = shutil.disk_usage("/")
-            response += f"• Free space: <code>{free/(1024**3):.1f}</code> GB\n"
-        except:
-            response += "• Disk space: Unknown\n"
-        
-        response += f"• Processing threads: <code>{thread_executor._max_workers}</code>\n\n"
-        
-        response += (
-            f"<b>🚀 How to Upload:</b>\n"
-            f"1. Send file directly to bot\n"
-            f"2. Bot will try to download it\n"
-            f"3. If Telegram rejects it, compress first\n\n"
+            if search_type == 'email':
+                count, results = self.search_engine.search_email_only(query)
+                result_type = "email addresses"
+            elif search_type == 'login':
+                count, results = self.search_engine.search_login(query)
+                result_type = "login:password pairs"
+            elif search_type == 'password':
+                count, results = self.search_engine.search_password(query)
+                result_type = "password matches"
+            else:
+                await msg.edit_text("❌ Invalid search type")
+                return
             
-            f"<i>Note: Only admins can upload files</i>"
+            logger.info(f"📊 Found {count:,} results for '{query}' with type '{search_type}'")
+            
+            success = self.credit_system.use_credits(user_id, search_type, query, count)
+            
+            if not success:
+                await msg.edit_text("❌ Error using credits")
+                return
+            
+            daily_credits = self.credit_system.get_daily_credits_left(user_id)
+            
+            if count == 0:
+                await msg.edit_text(
+                    f"🔍 <b>Search Results</b>\n\n"
+                    f"<b>Query:</b> <code>{self.escape_html(query)}</code>\n"
+                    f"<b>Type:</b> {search_type.capitalize()}\n"
+                    f"<b>Results:</b> 0\n\n"
+                    f"No results found for your search.\n\n"
+                    f"<i>Daily credits remaining: {daily_credits}/2</i>"
+                )
+                return
+            
+            await msg.edit_text(
+                f"✅ Found: {count:,} results\n"
+                f"📁 Creating file with ALL results...\n"
+                f"⏳ Please wait..."
+            )
+            
+            # Create file with ALL results
+            results_text = "\n".join(results)
+            file_content = f"""SEARCH RESULTS - {BOT_NAME}
+Type: {search_type.capitalize()}
+Query: {query}
+Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Total Results: {count:,}
+
+{results_text}"""
+            
+            file_size_bytes = len(file_content.encode('utf-8'))
+            file_size_mb = file_size_bytes / (1024 * 1024)
+            
+            if file_size_mb <= 45:
+                file_obj = io.BytesIO(file_content.encode('utf-8'))
+                filename = f"{search_type}_{query.replace('@', '_at_').replace('.', '_dot_')}_{count}_results.txt"
+                file_obj.name = filename
+                
+                await update.message.reply_document(
+                    document=file_obj,
+                    caption=(
+                        f"✅ <b>SEARCH COMPLETED</b>\n\n"
+                        f"<b>Type:</b> {search_type.capitalize()}\n"
+                        f"<b>Query:</b> {query}\n"
+                        f"<b>Results:</b> {count:,}\n"
+                        f"<b>Daily credits left:</b> {daily_credits}/2\n"
+                        f"<b>Total credits:</b> {self.credit_system.get_user_credits(user_id)}\n\n"
+                        f"<i>ALL results in one file</i>"
+                    ),
+                    parse_mode='HTML'
+                )
+                await msg.delete()
+            else:
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    zip_file.writestr(f"{search_type}_{query}_ALL_RESULTS.txt", file_content)
+                
+                zip_buffer.seek(0)
+                zip_filename = f"{search_type}_{query}_{count}_results.zip"
+                zip_buffer.name = zip_filename
+                
+                await update.message.reply_document(
+                    document=zip_buffer,
+                    caption=(
+                        f"✅ <b>SEARCH COMPLETED</b>\n\n"
+                        f"<b>Type:</b> {search_type.capitalize()}\n"
+                        f"<b>Query:</b> {query}\n"
+                        f"<b>Results:</b> {count:,}\n"
+                        f"<b>File size:</b> {file_size_mb:.1f} MB\n"
+                        f"<b>Daily credits left:</b> {daily_credits}/2\n\n"
+                        f"<i>ALL results in ZIP file</i>"
+                    ),
+                    parse_mode='HTML'
+                )
+                await msg.delete()
+                
+        except Exception as e:
+            logger.error(f"Search error: {e}")
+            await msg.edit_text(f"❌ Error: {str(e)}")
+    
+    async def perform_dni_search(self, update: Update, user_id: int, domain: str):
+        """Search for DNI:password combos ONLY - ALL RESULTS"""
+        if not self.credit_system.has_enough_credits(user_id):
+            await self.send_no_credits_message(update, user_id)
+            return
+        
+        msg = await update.message.reply_html(
+            f"🔍 Searching DNI:password from: <code>{self.escape_html(domain)}</code>\n"
+            f"⏳ Collecting ALL results (NO emails)..."
         )
         
-        await update.message.reply_text(response, parse_mode='HTML')
+        try:
+            count, results = self.search_engine.search_dni_domain_only_dni_pass(domain)
+            result_type = "DNI:password combos (NO emails)"
+            
+            logger.info(f"📊 Found {count:,} DNI results for '{domain}'")
+            
+            success = self.credit_system.use_credits(user_id, 'dni', domain, count)
+            
+            if not success:
+                await msg.edit_text("❌ Error using credits")
+                return
+            
+            daily_credits = self.credit_system.get_daily_credits_left(user_id)
+            
+            if count == 0:
+                await msg.edit_text(
+                    f"🔍 <b>DNI Search Results</b>\n\n"
+                    f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
+                    f"<b>Results:</b> 0 DNI:password combos\n\n"
+                    f"No Spanish ID (DNI) combos found for {domain}.\n\n"
+                    f"<i>Daily credits remaining: {daily_credits}/2</i>"
+                )
+                return
+            
+            await msg.edit_text(
+                f"✅ Found: {count:,} DNI:password combos\n"
+                f"📁 Creating file with ALL results...\n"
+                f"⏳ Please wait..."
+            )
+            
+            # Create file with ALL results
+            results_text = "\n".join(results)
+            file_content = f"""DNI SEARCH RESULTS - {BOT_NAME}
+Domain: {domain}
+Type: DNI:password combos ONLY (NO emails)
+Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Total Results: {count:,}
+
+{results_text}"""
+            
+            file_size_bytes = len(file_content.encode('utf-8'))
+            file_size_mb = file_size_bytes / (1024 * 1024)
+            
+            if file_size_mb <= 45:
+                file_obj = io.BytesIO(file_content.encode('utf-8'))
+                filename = f"dni_{domain.replace('.', '_dot_')}_{count}_results.txt"
+                file_obj.name = filename
+                
+                await update.message.reply_document(
+                    document=file_obj,
+                    caption=(
+                        f"✅ <b>DNI SEARCH COMPLETED</b>\n\n"
+                        f"<b>Domain:</b> {domain}\n"
+                        f"<b>Results:</b> {count:,} DNI:password combos\n"
+                        f"<b>Note:</b> NO emails included\n"
+                        f"<b>Daily credits left:</b> {daily_credits}/2\n"
+                        f"<b>Total credits:</b> {self.credit_system.get_user_credits(user_id)}\n\n"
+                        f"<i>ALL results in one file</i>"
+                    ),
+                    parse_mode='HTML'
+                )
+                await msg.delete()
+            else:
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    zip_file.writestr(f"dni_{domain}_ALL_RESULTS.txt", file_content)
+                
+                zip_buffer.seek(0)
+                zip_filename = f"dni_{domain}_{count}_results.zip"
+                zip_buffer.name = zip_filename
+                
+                await update.message.reply_document(
+                    document=zip_buffer,
+                    caption=(
+                        f"✅ <b>DNI SEARCH COMPLETED</b>\n\n"
+                        f"<b>Domain:</b> {domain}\n"
+                        f"<b>Results:</b> {count:,} DNI:password combos\n"
+                        f"<b>Note:</b> NO emails included\n"
+                        f"<b>File size:</b> {file_size_mb:.1f} MB\n"
+                        f"<b>Daily credits left:</b> {daily_credits}/2\n\n"
+                        f"<i>ALL results in ZIP file</i>"
+                    ),
+                    parse_mode='HTML'
+                )
+                await msg.delete()
+                
+        except Exception as e:
+            logger.error(f"DNI search error: {e}")
+            await msg.edit_text(f"❌ Error: {str(e)}")
+    
+    async def send_no_credits_message(self, update: Update, user_id: int):
+        """Send message when user has no credits"""
+        daily_credits = self.credit_system.get_daily_credits_left(user_id)
+        
+        message = (
+            f"❌ <b>No Credits Available</b>\n\n"
+            f"You have used all your credits.\n\n"
+            f"<b>Daily Credits:</b> {daily_credits}/2\n\n"
+            f"Credits reset at midnight UTC.\n"
+            f"Contact {BOT_OWNER} for more credits."
+        )
+        
+        if update.callback_query:
+            await update.callback_query.edit_message_text(message, parse_mode='HTML')
+        else:
+            await update.message.reply_html(message)
+    
+    # ============================================================================
+    # BUTTON HANDLER (sin cambios)
+    # ============================================================================
     
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         await query.answer()
         
-        user_id = query.from_user.id
+        user = update.effective_user
+        data = query.data
         
-        if query.data == "menu_search":
+        if data == "start_search":
             await query.edit_message_text(
-                "<b>🔍 SEARCH DOMAIN</b>\n\n"
-                "Send: <code>/search domain.com</code>\n\n"
-                "<b>Examples:</b>\n"
-                "<code>/search gmail.com</code>\n"
-                "<code>/search facebook.com</code>",
+                "🔍 <b>Search Command</b>\n\n"
+                "Usage: <code>/search [query]</code>\n\n"
+                "<i>Examples:</i>\n"
+                "<code>/search google.com</code>\n"
+                "<code>/search user@gmail.com</code>\n"
+                "<code>/search @hotmail.com</code>\n\n"
+                "Then choose format!\n\n"
+                "<b>📁 ALL RESULTS IN ONE FILE - NO LIMITS</b>",
                 parse_mode='HTML'
             )
-        
-        elif query.data == "menu_email":
-            await query.edit_message_text(
-                "<b>📧 SEARCH EMAIL</b>\n\n"
-                "Send: <code>/email user@gmail.com</code>",
-                parse_mode='HTML'
-            )
-        
-        elif query.data == "menu_credits":
-            total_credits = self.credit_system.get_user_credits(user_id)
-            daily_credits = self.credit_system.get_daily_credits_left(user_id)
-            await query.edit_message_text(
-                f"<b>💰 YOUR CREDITS</b>\n\n"
-                f"🆓 <b>Daily:</b> <code>{daily_credits}</code>/{MAX_FREE_CREDITS}\n"
-                f"🎯 <b>Total:</b> <code>{total_credits}</code>\n\n"
-                f"<i>Use /mycredits for details</i>",
-                parse_mode='HTML'
-            )
-        
-        elif query.data == "menu_referral":
-            await self.referral_command(update, context)
-        
-        elif query.data == "menu_help":
-            await self.help_command(update, context)
-        
-        elif query.data == "copy_referral":
-            referral_link = self.credit_system.get_referral_link(user_id)
-            await query.answer(f"Link copied: {referral_link}", show_alert=False)
-        
-        elif query.data == "menu_admin":
-            if user_id not in ADMIN_IDS:
-                await query.edit_message_text("❌ Admins only.")
-                return
             
+        elif data.startswith("format_"):
+            parts = data.split(":", 1)
+            if len(parts) == 2:
+                format_type = parts[0].replace("format_", "")
+                search_query = parts[1]
+                await self.perform_search_with_format(update, user.id, search_query, format_type)
+        
+        elif data == "cancel_search":
+            await query.edit_message_text(
+                "❌ <b>Search Cancelled</b>\n\n"
+                "Use /search to start a new search.",
+                parse_mode='HTML'
+            )
+            
+        elif data == "menu_credits":
+            total_credits = self.credit_system.get_user_credits(user.id)
+            daily_credits = self.credit_system.get_daily_credits_left(user.id)
+            extra_credits = total_credits - daily_credits
+            
+            await query.edit_message_text(
+                f"💰 <b>Your Credits</b>\n\n"
+                f"<b>Daily Credits:</b> {daily_credits}/2\n"
+                f"<b>Extra Credits:</b> {extra_credits}\n"
+                f"<b>Total Credits:</b> {total_credits}\n\n"
+                f"<i>Daily credits reset at midnight UTC</i>",
+                parse_mode='HTML'
+            )
+            
+        elif data == "menu_help":
+            help_text = (
+                f"📚 <b>{BOT_NAME} - HELP</b>\n\n"
+                
+                "<b>🔍 SEARCH:</b>\n"
+                "/search [query] - Main search command\n\n"
+                
+                "<b>📋 FORMATS:</b>\n"
+                "• <b>Email:Pass Only</b> - Clean format (NO URLs)\n"
+                "• <b>Full Lines</b> - Complete lines with URLs\n\n"
+                
+                "<b>📁 DELIVERY:</b>\n"
+                "• <b>ALL</b> results in ONE file\n"
+                "• <b>NO LIMIT</b> on results\n"
+                "• Small files → .txt\n"
+                "• Large files → .zip\n\n"
+                
+                "<b>💰 CREDITS:</b>\n"
+                "• 2 free credits daily\n"
+                "• Resets at midnight UTC\n\n"
+                
+                f"<b>SUPPORT:</b>\n{BOT_OWNER}"
+            )
+            await query.edit_message_text(help_text, parse_mode='HTML')
+            
+        elif data == "menu_admin" and user.id in ADMIN_IDS:
             keyboard = [
-                [InlineKeyboardButton("📊 Statistics", callback_data="admin_stats")],
-                [InlineKeyboardButton("📋 List Users", callback_data="admin_users")],
-                [InlineKeyboardButton("📤 Upload File", callback_data="admin_upload")],
-                [InlineKeyboardButton("📢 Broadcast", callback_data="admin_broadcast")],
+                [InlineKeyboardButton("📊 /stats - Statistics", callback_data="admin_stats")],
+                [InlineKeyboardButton("👥 /userslist - Users List", callback_data="admin_users")],
+                [InlineKeyboardButton("👤 /userinfo - User Info", callback_data="admin_userinfo")],
+                [InlineKeyboardButton("➕ /addcredits - Add Credits", callback_data="admin_add")],
+                [InlineKeyboardButton("📢 /broadcast - Broadcast", callback_data="admin_broadcast")],
+                [InlineKeyboardButton("📁 /upload - Upload File", callback_data="admin_upload")],
+                [InlineKeyboardButton("⬅️ Back", callback_data="menu_back")],
             ]
-            
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await query.edit_message_text(
-                "<b>👑 ADMIN PANEL</b>\n\n"
-                "<i>Select an option:</i>",
-                parse_mode='HTML',
-                reply_markup=reply_markup
-            )
-        
-        elif query.data == "admin_stats":
-            await self.stats_command(update, context)
-        
-        elif query.data == "admin_users":
-            await self.userslist_command(update, context)
-        
-        elif query.data == "admin_upload":
-            await self.upload_command(update, context)
-        
-        elif query.data == "admin_broadcast":
-            await query.edit_message_text(
-                "<b>📢 BROADCAST MESSAGE</b>\n\n"
-                "To send a message to all users:\n"
-                "<code>/broadcast your message here</code>\n\n"
-                "<b>Example:</b>\n"
-                "<code>/broadcast New update available! Check /help for new features.</code>",
+                "👑 <b>Admin Panel</b>\n\n"
+                "Select an option:",
+                reply_markup=reply_markup,
                 parse_mode='HTML'
             )
+            
+        elif data == "admin_stats" and user.id in ADMIN_IDS:
+            await self.stats_command(update, context)
+            
+        elif data == "admin_users" and user.id in ADMIN_IDS:
+            await self.userslist_command(update, context)
+            
+        elif data == "admin_userinfo" and user.id in ADMIN_IDS:
+            await query.edit_message_text(
+                "👤 <b>User Info Command</b>\n\n"
+                "Usage: <code>/userinfo [user_id or username]</code>\n\n"
+                "<i>Examples:</i>\n"
+                "<code>/userinfo 123456789</code>\n"
+                "<code>/userinfo @username</code>",
+                parse_mode='HTML'
+            )
+            
+        elif data == "admin_add" and user.id in ADMIN_IDS:
+            await query.edit_message_text(
+                "➕ <b>Add Credits Command</b>\n\n"
+                "Usage: <code>/addcredits [user_id] [amount] [type]</code>\n\n"
+                "<i>Examples:</i>\n"
+                "<code>/addcredits 123456789 10 extra</code>\n"
+                "<code>/addcredits 123456789 5 daily</code>",
+                parse_mode='HTML'
+            )
+            
+        elif data == "admin_broadcast" and user.id in ADMIN_IDS:
+            await query.edit_message_text(
+                "📢 <b>Broadcast Command</b>\n\n"
+                "Usage: <code>/broadcast [message]</code>\n\n"
+                "<i>Example:</i>\n"
+                "<code>/broadcast Hello everyone! New features added!</code>",
+                parse_mode='HTML'
+            )
+            
+        elif data == "admin_upload" and user.id in ADMIN_IDS:
+            await query.edit_message_text(
+                "📁 <b>Upload ULP File</b>\n\n"
+                "Send a .txt file with ULP data.\n"
+                "The file will be added to the search database.\n\n"
+                "Use command: <code>/upload</code> and attach a .txt file",
+                parse_mode='HTML'
+            )
+            
+        elif data == "menu_back":
+            await self.start(update, context)
 
 # ============================================================================
-# MAIN EXECUTION
+# INITIALIZATION
 # ============================================================================
 
-def run_flask():
-    app.run(host='0.0.0.0', port=PORT, threaded=True)
-
-def main():
-    logger.info(f"🚀 Starting {BOT_NAME} v{BOT_VERSION}")
-    logger.info(f"👑 Owner: {BOT_OWNER}")
-    logger.info(f"💰 Free credits: {MAX_FREE_CREDITS} (resets at {RESET_HOUR}:00)")
-    logger.info(f"📁 NO SIZE LIMITS - Telegram API may reject large files")
-    
-    init_database()
+def setup_application():
+    """Setup and return the Telegram application"""
     
     search_engine = SearchEngine()
     credit_system = CreditSystem()
@@ -2317,57 +1905,85 @@ def main():
     
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
-    search_conv = ConversationHandler(
-        entry_points=[CommandHandler('search', bot.search_command)],
-        states={
-            CHOOSING_FORMAT: [
-                CallbackQueryHandler(bot.format_selected_handler, pattern='^format_')
-            ]
-        },
-        fallbacks=[CommandHandler('cancel', lambda u, c: ConversationHandler.END)]
-    )
-    
-    # Basic commands
+    # Add all command handlers
     application.add_handler(CommandHandler("start", bot.start))
-    application.add_handler(CommandHandler("help", bot.help_command))
-    application.add_handler(CommandHandler("info", bot.info_command))
-    application.add_handler(CommandHandler("mycredits", bot.mycredits_command))
-    application.add_handler(CommandHandler("mystats", bot.mystats_command))
-    application.add_handler(CommandHandler("referral", bot.referral_command))
-    application.add_handler(CommandHandler("price", bot.price_command))
-    application.add_handler(search_conv)
+    application.add_handler(CommandHandler("search", bot.search_command))
     application.add_handler(CommandHandler("email", bot.email_command))
     application.add_handler(CommandHandler("login", bot.login_command))
     application.add_handler(CommandHandler("pass", bot.pass_command))
     application.add_handler(CommandHandler("dni", bot.dni_command))
-    application.add_handler(CommandHandler("uploadlarge", bot.upload_large_system))
-    application.add_handler(CommandHandler("finishupload", bot.finish_upload_command))
-    application.add_handler(CommandHandler("splithelp", bot.split_help_command))
-    application.add_handler(MessageHandler(filters.Document.ALL, bot.handle_file_part))
     
-    # Admin commands
-    application.add_handler(CommandHandler("addcredits", bot.addcredits_command))
-    application.add_handler(CommandHandler("userinfo", bot.userinfo_command))
+    application.add_handler(CommandHandler("mycredits", bot.mycredits_command))
+    application.add_handler(CommandHandler("mystats", bot.mystats_command))
+    application.add_handler(CommandHandler("referral", bot.referral_command))
+    application.add_handler(CommandHandler("price", bot.price_command))
+    
+    application.add_handler(CommandHandler("info", bot.info_command))
+    application.add_handler(CommandHandler("help", bot.help_command))
+    
     application.add_handler(CommandHandler("stats", bot.stats_command))
     application.add_handler(CommandHandler("userslist", bot.userslist_command))
+    application.add_handler(CommandHandler("userinfo", bot.userinfo_command))
+    application.add_handler(CommandHandler("addcredits", bot.addcredits_command))
     application.add_handler(CommandHandler("broadcast", bot.broadcast_command))
     application.add_handler(CommandHandler("upload", bot.upload_command))
     
-    # File upload handler
-    application.add_handler(MessageHandler(filters.Document.ALL, bot.handle_large_file_upload))
+    application.add_handler(CallbackQueryHandler(bot.button_handler))
     
-    # Button handlers
-    application.add_handler(CallbackQueryHandler(bot.button_handler, pattern='^menu_'))
-    application.add_handler(CallbackQueryHandler(bot.button_handler, pattern='^admin_'))
-    application.add_handler(CallbackQueryHandler(bot.button_handler, pattern='^copy_'))
-    application.add_handler(CallbackQueryHandler(bot.button_handler, pattern='^format_'))
+    return application, bot
+
+# ============================================================================
+# DAILY RESET FUNCTION
+# ============================================================================
+
+async def daily_reset_job(context: ContextTypes.DEFAULT_TYPE):
+    """Reset daily credits for all users"""
+    logger.info("🔄 Running daily credit reset...")
+    
+    try:
+        if hasattr(context, 'bot_data') and 'ulp_bot' in context.bot_data:
+            credit_system = context.bot_data['ulp_bot'].credit_system
+        else:
+            credit_system = CreditSystem()
+        
+        users_reset = credit_system.reset_all_daily_credits()
+        logger.info(f"✅ Daily reset completed for {users_reset} users")
+        
+    except Exception as e:
+        logger.error(f"❌ Error in daily reset: {e}")
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
+def run():
+    """Run the bot with Flask server"""
+    
+    application, bot = setup_application()
+    application.bot_data['ulp_bot'] = bot
+    
+    # Setup daily reset job
+    job_queue = application.job_queue
+    if job_queue:
+        job_queue.run_daily(
+            daily_reset_job,
+            time(hour=RESET_HOUR, minute=0, second=0),
+            days=(0, 1, 2, 3, 4, 5, 6),
+            name="daily_credit_reset"
+        )
+        logger.info(f"⏰ Daily reset scheduled for {RESET_HOUR}:00 UTC")
+    
+    # Start Flask in background
+    def run_flask():
+        app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
     
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     logger.info(f"🌐 Flask server running on port {PORT}")
     
-    logger.info("🤖 Bot started and ready")
-    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    # Start the bot
+    logger.info("🤖 Bot started with ALL commands - FIXED VERSION")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    run()
