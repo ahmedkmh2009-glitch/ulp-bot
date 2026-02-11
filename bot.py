@@ -1,5 +1,5 @@
 """
-🔍 ULP Searcher Bot - COMPLETE ENGLISH VERSION - CORREGIDO
+🔍 ULP Searcher Bot - COMPLETE ENGLISH VERSION - CORREGIDO FINAL
 With ALL Commands + Broadcast + Referral System
 Owner: @iberic_owner
 """
@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 import glob
 import asyncio
+import re
 
 from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -33,12 +34,12 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 ADMIN_IDS = [int(id.strip()) for id in os.getenv('ADMIN_IDS', '').split(',') if id.strip()]
 BOT_OWNER = "@iberic_owner"
 BOT_NAME = "🔍 ULP Searcher Bot"
-BOT_VERSION = "7.1 COMPLETE EN - CORREGIDO"
-MAX_FREE_CREDITS = 2  # ✅ 2 free credits
+BOT_VERSION = "7.2 COMPLETE EN - DNI FIXED"
+MAX_FREE_CREDITS = 2
 RESET_HOUR = 0
 
 # Referral system
-REFERRAL_BONUS = 1  # ✅ +1 credit per referral
+REFERRAL_BONUS = 1
 
 PORT = int(os.getenv('PORT', 10000))
 
@@ -81,7 +82,7 @@ def health():
     return jsonify({"status": "healthy"})
 
 # ============================================================================
-# SEARCH ENGINE - CORREGIDO: SIN LÍMITES
+# SEARCH ENGINE - SIN LÍMITES
 # ============================================================================
 
 class SearchEngine:
@@ -95,7 +96,7 @@ class SearchEngine:
         logger.info(f"📂 Loaded {len(self.data_files)} files")
     
     def search_domain(self, domain: str, max_results: int = None) -> Tuple[int, List[str]]:
-        """Busca dominio SIN LÍMITE (o con límite opcional)"""
+        """Busca dominio SIN LÍMITE"""
         results = []
         domain_lower = domain.lower()
         
@@ -110,7 +111,6 @@ class SearchEngine:
                         if domain_lower in line.lower():
                             results.append(line)
                         
-                        # Solo aplicar límite si se especifica
                         if max_results and len(results) >= max_results:
                             break
             
@@ -196,8 +196,12 @@ class SearchEngine:
         return len(results), results
     
     def search_dni(self, dni: str, max_results: int = None) -> Tuple[int, List[str]]:
+        """Busca DNI español en formato DNI:password"""
         results = []
         dni_clean = dni.upper().replace(' ', '').replace('-', '')
+        
+        # Patrón para DNI español: 8 números + letra
+        dni_pattern = r'\b[0-9]{8}[A-Z]\b'
         
         for file_path in self.data_files:
             try:
@@ -207,8 +211,49 @@ class SearchEngine:
                         if not line:
                             continue
                         
-                        if dni_clean in line.upper().replace(' ', '').replace('-', ''):
-                            results.append(line)
+                        # Buscar líneas que contengan el DNI
+                        if dni_clean in line.upper():
+                            # Verificar que sea un formato DNI:pass
+                            parts = line.split(':')
+                            if len(parts) >= 2:
+                                # El primer campo debe ser un DNI válido
+                                first_part = parts[0].upper().strip()
+                                if re.match(dni_pattern, first_part):
+                                    results.append(line)
+                        
+                        if max_results and len(results) >= max_results:
+                            break
+            
+            except Exception as e:
+                logger.error(f"Error in {file_path}: {e}")
+                continue
+        
+        return len(results), results
+    
+    def search_dni_by_domain(self, domain: str, max_results: int = None) -> Tuple[int, List[str]]:
+        """Busca combos DNI:password que contengan un dominio específico"""
+        results = []
+        domain_lower = domain.lower()
+        
+        # Patrón para DNI español
+        dni_pattern = r'\b[0-9]{8}[A-Z]\b'
+        
+        for file_path in self.data_files:
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        # Verificar que sea DNI:password
+                        parts = line.split(':')
+                        if len(parts) >= 2:
+                            first_part = parts[0].upper().strip()
+                            if re.match(dni_pattern, first_part):
+                                # Buscar el dominio en toda la línea
+                                if domain_lower in line.lower():
+                                    results.append(line)
                         
                         if max_results and len(results) >= max_results:
                             break
@@ -566,7 +611,6 @@ class CreditSystem:
             return [dict(row) for row in cursor.fetchall()]
     
     def get_all_users_for_broadcast(self):
-        """Get all user IDs for broadcasting"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('SELECT user_id FROM users WHERE active = TRUE')
@@ -604,7 +648,7 @@ class CreditSystem:
             return stats
 
 # ============================================================================
-# MAIN BOT - CORREGIDO: FILTRO DE FORMATOS Y SIEMPRE ARCHIVOS
+# MAIN BOT - CORREGIDO: DNI CON DOMINIO Y FILTROS EXACTOS
 # ============================================================================
 
 class ULPBot:
@@ -704,8 +748,8 @@ class ULPBot:
         
         keyboard = [
             [
-                InlineKeyboardButton("🔐 email:pass", callback_data="format_emailpass"),
-                InlineKeyboardButton("🔗 url:email:pass", callback_data="format_urlemailpass")
+                InlineKeyboardButton("🔐 email:pass (extracted)", callback_data="format_emailpass"),
+                InlineKeyboardButton("🔗 url:email:pass (full)", callback_data="format_urlemailpass")
             ],
             [InlineKeyboardButton("❌ Cancel", callback_data="format_cancel")]
         ]
@@ -764,16 +808,36 @@ class ULPBot:
         
         # FILTRAR según el formato seleccionado
         filtered_results = []
+        
         for line in all_results:
             line = line.strip()
+            if not line:
+                continue
+                
             if selected_format == "format_emailpass":
-                # SOLO email:password (exactamente dos campos, con @ en el primero)
+                # 🔥 EXTRACTO SOLO email:password de CUALQUIER formato
                 parts = line.split(':')
-                if len(parts) == 2 and '@' in parts[0] and '.' in parts[0]:
-                    filtered_results.append(line)
+                
+                # Buscar el email (que contiene @) y la contraseña
+                email = None
+                password = None
+                
+                for i, part in enumerate(parts):
+                    if '@' in part and '.' in part:  # Es un email
+                        email = part
+                        # La contraseña suele ser el siguiente campo
+                        if i + 1 < len(parts):
+                            password = parts[i + 1]
+                        break
+                
+                # Si encontramos email y password, creamos línea email:pass
+                if email and password:
+                    filtered_results.append(f"{email}:{password}")
+                    
             elif selected_format == "format_urlemailpass":
-                # url:email:password (tres o más campos)
-                if line.count(':') >= 2:
+                # 🔥 LÍNEA COMPLETA ORIGINAL (url:email:pass o cualquier formato)
+                # Solo verificamos que tenga al menos 2 ':' y que contenga @
+                if line.count(':') >= 2 and '@' in line:
                     filtered_results.append(line)
         
         # Si no hay resultados después del filtro
@@ -782,7 +846,7 @@ class ULPBot:
                 f"<b>❌ NO RESULTS IN SELECTED FORMAT</b>\n\n"
                 f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
                 f"<b>Total found (all formats):</b> <code>{total_found}</code>\n"
-                f"<b>Format selected:</b> {'email:pass' if selected_format == 'format_emailpass' else 'url:email:pass'}\n"
+                f"<b>Format selected:</b> {'email:pass (extracted)' if selected_format == 'format_emailpass' else 'url:email:pass (full line)'}\n"
                 f"<b>Results in this format:</b> <code>0</code>\n\n"
                 f"💰 <b>Credit NOT consumed</b>",
                 parse_mode='HTML'
@@ -799,10 +863,7 @@ class ULPBot:
         total_credits = self.credit_system.get_user_credits(user_id)
         daily_credits = self.credit_system.get_daily_credits_left(user_id)
         
-        # 🚨 NUEVA LÓGICA: SIEMPRE ARCHIVO, NUNCA MENSAJE DIRECTO
-        # < 5000 líneas → .txt
-        # >= 5000 líneas → .zip (dividido)
-        
+        # SIEMPRE ARCHIVO
         if len(filtered_results) < 5000:
             await self.send_results_as_txt(
                 query, 
@@ -835,7 +896,12 @@ class ULPBot:
         txt_buffer.write(content.encode('utf-8'))
         txt_buffer.seek(0)
         
-        format_name = "email_pass" if selected_format == "format_emailpass" else "url_email_pass"
+        if selected_format == "format_emailpass":
+            format_name = "email_pass_extracted"
+            format_display = "email:password (extracted)"
+        else:
+            format_name = "url_email_pass_full"
+            format_display = "url:email:password (full line)"
         
         await query_callback.message.reply_document(
             document=txt_buffer,
@@ -843,7 +909,7 @@ class ULPBot:
             caption=(
                 f"<b>📁 RESULTS (TXT FILE)</b>\n\n"
                 f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
-                f"<b>Format:</b> <code>{format_name.replace('_', ':')}</code>\n"
+                f"<b>Format:</b> <code>{format_display}</code>\n"
                 f"<b>Results:</b> <code>{total_found}</code>\n"
                 f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
                 f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
@@ -855,7 +921,7 @@ class ULPBot:
         await query_callback.edit_message_text(
             f"<b>✅ SEARCH COMPLETED</b>\n\n"
             f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
-            f"<b>Format:</b> <code>{format_name.replace('_', ':')}</code>\n"
+            f"<b>Format:</b> <code>{format_display}</code>\n"
             f"<b>Results:</b> <code>{total_found}</code>\n"
             f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
             f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
@@ -867,7 +933,13 @@ class ULPBot:
                                   daily_credits: int, total_credits: int, selected_format: str):
         """Divide en partes de 5000 líneas y comprime"""
         zip_buffer = io.BytesIO()
-        format_name = "email_pass" if selected_format == "format_emailpass" else "url_email_pass"
+        
+        if selected_format == "format_emailpass":
+            format_name = "email_pass_extracted"
+            format_display = "email:password (extracted)"
+        else:
+            format_name = "url_email_pass_full"
+            format_display = "url:email:password (full line)"
         
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             chunk_size = 5000
@@ -888,9 +960,9 @@ class ULPBot:
             caption=(
                 f"<b>📦 RESULTS (ZIP FILE)</b>\n\n"
                 f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
-                f"<b>Format:</b> <code>{format_name.replace('_', ':')}</code>\n"
+                f"<b>Format:</b> <code>{format_display}</code>\n"
                 f"<b>Results:</b> <code>{total_found}</code>\n"
-                f"<b>Parts:</b> <code>{(total_found + 4999) // 5000}</code> files\n"
+                f"<b>Parts:</b> <code>{total_parts}</code> files\n"
                 f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
                 f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
                 f"<i>📎 Results sent as .zip file ({total_found} lines)</i>"
@@ -901,11 +973,11 @@ class ULPBot:
         await query_callback.edit_message_text(
             f"<b>✅ SEARCH COMPLETED</b>\n\n"
             f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
-            f"<b>Format:</b> <code>{format_name.replace('_', ':')}</code>\n"
+            f"<b>Format:</b> <code>{format_display}</code>\n"
             f"<b>Results:</b> <code>{total_found}</code>\n"
             f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
             f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-            f"<i>📦 Results sent as .zip file (split into parts)</i>",
+            f"<i>📦 Results sent as .zip file (split into {total_parts} parts)</i>",
             parse_mode='HTML'
         )
     
@@ -947,47 +1019,25 @@ class ULPBot:
         total_credits = self.credit_system.get_user_credits(user_id)
         daily_credits = self.credit_system.get_daily_credits_left(user_id)
         
-        # Siempre archivo, nunca mensaje
-        if total_found < 5000:
-            txt_buffer = io.BytesIO()
-            txt_buffer.write("\n".join(results).encode('utf-8'))
-            txt_buffer.seek(0)
-            
-            await msg.reply_document(
-                document=txt_buffer,
-                filename=f"ulp_email_{email}_{total_found}.txt",
-                caption=(
-                    f"<b>📁 EMAIL RESULTS</b>\n\n"
-                    f"<b>Email:</b> <code>{self.escape_html(email)}</code>\n"
-                    f"<b>Results:</b> <code>{total_found}</code>\n"
-                    f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-                    f"<b>Total credits:</b> <code>{total_credits}</code>"
-                ),
-                parse_mode='HTML'
-            )
-            await msg.edit_text(f"<b>✅ Email search completed</b>", parse_mode='HTML')
-        else:
-            zip_buffer = io.BytesIO()
-            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                for i in range(0, len(results), 5000):
-                    chunk = results[i:i+5000]
-                    content = "\n".join(chunk)
-                    zip_file.writestr(f"ulp_email_{email}_part{i//5000+1}.txt", content)
-            zip_buffer.seek(0)
-            
-            await msg.reply_document(
-                document=zip_buffer,
-                filename=f"ulp_email_{email}_{total_found}.zip",
-                caption=(
-                    f"<b>📦 EMAIL RESULTS</b>\n\n"
-                    f"<b>Email:</b> <code>{self.escape_html(email)}</code>\n"
-                    f"<b>Results:</b> <code>{total_found}</code>\n"
-                    f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-                    f"<b>Total credits:</b> <code>{total_credits}</code>"
-                ),
-                parse_mode='HTML'
-            )
-            await msg.edit_text(f"<b>✅ Email search completed</b>", parse_mode='HTML')
+        # Siempre archivo
+        txt_buffer = io.BytesIO()
+        txt_buffer.write("\n".join(results).encode('utf-8'))
+        txt_buffer.seek(0)
+        
+        await msg.reply_document(
+            document=txt_buffer,
+            filename=f"ulp_email_{email}_{total_found}.txt",
+            caption=(
+                f"<b>📁 EMAIL RESULTS</b>\n\n"
+                f"<b>Email:</b> <code>{self.escape_html(email)}</code>\n"
+                f"<b>Results:</b> <code>{total_found}</code>\n"
+                f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
+                f"<b>Total credits:</b> <code>{total_credits}</code>"
+            ),
+            parse_mode='HTML'
+        )
+        
+        await msg.edit_text(f"<b>✅ Email search completed</b>", parse_mode='HTML')
     
     async def login_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -1027,7 +1077,6 @@ class ULPBot:
         total_credits = self.credit_system.get_user_credits(user_id)
         daily_credits = self.credit_system.get_daily_credits_left(user_id)
         
-        # Siempre archivo
         txt_buffer = io.BytesIO()
         txt_buffer.write("\n".join(results).encode('utf-8'))
         txt_buffer.seek(0)
@@ -1085,7 +1134,6 @@ class ULPBot:
         total_credits = self.credit_system.get_user_credits(user_id)
         daily_credits = self.credit_system.get_daily_credits_left(user_id)
         
-        # Siempre archivo
         txt_buffer = io.BytesIO()
         txt_buffer.write("\n".join(results).encode('utf-8'))
         txt_buffer.seek(0)
@@ -1106,6 +1154,7 @@ class ULPBot:
         await msg.edit_text(f"<b>✅ Password search completed</b>", parse_mode='HTML')
     
     async def dni_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Busca DNI:password por número de DNI o por dominio"""
         user_id = update.effective_user.id
         
         if not self.credit_system.has_enough_credits(user_id):
@@ -1118,25 +1167,43 @@ class ULPBot:
         
         if not context.args:
             await update.message.reply_text(
-                "<b>❌ Usage:</b> <code>/dni 12345678A</code>",
+                "<b>❌ Usage:</b>\n"
+                "<code>/dni 12345678A</code> - Search by DNI number\n"
+                "<code>/dni dominio.com</code> - Search DNI:pass by domain\n\n"
+                "<b>Examples:</b>\n"
+                "<code>/dni 12345678A</code>\n"
+                "<code>/dni gmail.com</code>",
                 parse_mode='HTML'
             )
             return
         
-        dni = context.args[0].upper()
-        msg = await update.message.reply_text(f"🆔 <b>Searching {self.escape_html(dni)}...</b>", parse_mode='HTML')
+        query = context.args[0].upper()
+        msg = await update.message.reply_text(f"🆔 <b>Searching DNI combos: {self.escape_html(query)}...</b>", parse_mode='HTML')
         
-        total_found, results = self.search_engine.search_dni(dni, max_results=None)
+        # Detectar si es un DNI (8 números + letra) o un dominio
+        dni_pattern = r'^[0-9]{8}[A-Z]$'
+        
+        if re.match(dni_pattern, query):
+            # Búsqueda por número de DNI
+            total_found, results = self.search_engine.search_dni(query, max_results=None)
+            search_type = "dni_number"
+            search_display = f"DNI: {query}"
+        else:
+            # Búsqueda por dominio
+            total_found, results = self.search_engine.search_dni_by_domain(query.lower(), max_results=None)
+            search_type = "dni_domain"
+            search_display = f"Domain: {query.lower()}"
         
         if total_found == 0:
             await msg.edit_text(
                 f"<b>❌ NOT FOUND</b>\n\n"
-                f"<b>DNI:</b> <code>{self.escape_html(dni)}</code>",
+                f"<b>{search_display}</b>\n"
+                f"<b>No DNI:password combos found</b>",
                 parse_mode='HTML'
             )
             return
         
-        if not self.credit_system.use_credits(user_id, "dni", dni, total_found):
+        if not self.credit_system.use_credits(user_id, "dni", query, total_found):
             await msg.edit_text("<b>❌ Error using credits</b>", parse_mode='HTML')
             return
         
@@ -1144,22 +1211,63 @@ class ULPBot:
         daily_credits = self.credit_system.get_daily_credits_left(user_id)
         
         # Siempre archivo
-        txt_buffer = io.BytesIO()
-        txt_buffer.write("\n".join(results).encode('utf-8'))
-        txt_buffer.seek(0)
-        
-        await msg.reply_document(
-            document=txt_buffer,
-            filename=f"ulp_dni_{dni}_{total_found}.txt",
-            caption=(
-                f"<b>📁 DNI RESULTS</b>\n\n"
-                f"<b>DNI:</b> <code>{self.escape_html(dni)}</code>\n"
-                f"<b>Results:</b> <code>{total_found}</code>\n"
-                f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-                f"<b>Total credits:</b> <code>{total_credits}</code>"
-            ),
-            parse_mode='HTML'
-        )
+        if total_found < 5000:
+            txt_buffer = io.BytesIO()
+            content = "\n".join(results)
+            txt_buffer.write(content.encode('utf-8'))
+            txt_buffer.seek(0)
+            
+            filename = f"ulp_dni_{query}_{total_found}.txt" if search_type == "dni_number" else f"ulp_dni_domain_{query}_{total_found}.txt"
+            
+            await msg.reply_document(
+                document=txt_buffer,
+                filename=filename,
+                caption=(
+                    f"<b>📁 DNI:PASSWORD RESULTS</b>\n\n"
+                    f"<b>{search_display}</b>\n"
+                    f"<b>Results:</b> <code>{total_found}</code>\n"
+                    f"<b>Format:</b> <code>DNI:password</code>\n"
+                    f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
+                    f"<b>Total credits:</b> <code>{total_credits}</code>"
+                ),
+                parse_mode='HTML'
+            )
+        else:
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                chunk_size = 5000
+                total_parts = (len(results) + chunk_size - 1) // chunk_size
+                
+                for i in range(0, len(results), chunk_size):
+                    chunk = results[i:i + chunk_size]
+                    content = "\n".join(chunk)
+                    part_num = i // chunk_size + 1
+                    
+                    if search_type == "dni_number":
+                        filename = f"ulp_dni_{query}_part{part_num}_of_{total_parts}.txt"
+                    else:
+                        filename = f"ulp_dni_domain_{query}_part{part_num}_of_{total_parts}.txt"
+                    
+                    zip_file.writestr(filename, content)
+            
+            zip_buffer.seek(0)
+            
+            zip_filename = f"ulp_dni_{query}_{total_found}.zip" if search_type == "dni_number" else f"ulp_dni_domain_{query}_{total_found}.zip"
+            
+            await msg.reply_document(
+                document=zip_buffer,
+                filename=zip_filename,
+                caption=(
+                    f"<b>📦 DNI:PASSWORD RESULTS (ZIP)</b>\n\n"
+                    f"<b>{search_display}</b>\n"
+                    f"<b>Results:</b> <code>{total_found}</code>\n"
+                    f"<b>Parts:</b> <code>{total_parts}</code> files\n"
+                    f"<b>Format:</b> <code>DNI:password</code>\n"
+                    f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
+                    f"<b>Total credits:</b> <code>{total_credits}</code>"
+                ),
+                parse_mode='HTML'
+            )
         
         await msg.edit_text(f"<b>✅ DNI search completed</b>", parse_mode='HTML')
     
@@ -1330,7 +1438,7 @@ class ULPBot:
             f"<b>🔍 WHAT WE DO:</b>\n"
             f"• Search credentials by domain\n"
             f"• Search by email, login, password\n"
-            f"• Search Spanish DNI numbers\n"
+            f"• Search DNI:password combos (by DNI number or domain)\n"
             f"• Local database with millions of records\n\n"
             
             f"<b>💰 CREDIT SYSTEM:</b>\n"
@@ -1343,7 +1451,7 @@ class ULPBot:
             f"• email:password\n"
             f"• url:email:password\n"
             f"• login:password\n"
-            f"• email only\n\n"
+            f"• DNI:password\n\n"
             
             f"<b>📁 RESULTS DELIVERY:</b>\n"
             f"• ALL results are delivered as files\n"
@@ -1366,14 +1474,13 @@ class ULPBot:
             
             f"<b>🔍 SEARCH COMMANDS:</b>\n"
             f"<code>/search domain.com</code> - Search by domain\n"
+            f"  • email:pass (extracted) - SOLO email:password\n"
+            f"  • url:email:pass (full) - Línea completa\n"
             f"<code>/email user@gmail.com</code> - Search by email\n"
             f"<code>/login username</code> - Search by login\n"
             f"<code>/pass password123</code> - Search by password\n"
-            f"<code>/dni 12345678A</code> - Search Spanish DNI\n\n"
-            
-            f"<b>📋 FORMATS FOR /search:</b>\n"
-            f"• email:password\n"
-            f"• url:email:password\n\n"
+            f"<code>/dni 12345678A</code> - Search DNI:password by DNI number\n"
+            f"<code>/dni dominio.com</code> - Search DNI:password by domain\n\n"
             
             f"<b>💰 PERSONAL COMMANDS:</b>\n"
             f"<code>/mycredits</code> - View your credits\n"
@@ -1778,7 +1885,7 @@ class ULPBot:
                 "<b>📤 UPLOAD FILE</b>\n\n"
                 "To upload a file:\n"
                 "1. Send a .txt file\n"
-                "2. Format: email:pass or url:email:pass\n"
+                "2. Format: email:pass, url:email:pass, login:pass, DNI:pass\n"
                 "3. Max 50MB\n\n"
                 "File will be indexed automatically.",
                 parse_mode='HTML'
