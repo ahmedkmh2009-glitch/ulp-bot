@@ -1,2 +1,2 @@
 python-telegram-bot==20.8
-flask[async]==3.0.0
+Flask==2.3.3
