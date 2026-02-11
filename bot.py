@@ -1,5 +1,5 @@
 """
-🔍 ULP Searcher Bot - COMPLETE ENGLISH VERSION
+🔍 ULP Searcher Bot - COMPLETE ENGLISH VERSION - CORREGIDO
 With ALL Commands + Broadcast + Referral System
 Owner: @iberic_owner
 """
@@ -15,6 +15,7 @@ from datetime import datetime, time, timedelta
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 import glob
+import asyncio
 
 from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -32,7 +33,7 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 ADMIN_IDS = [int(id.strip()) for id in os.getenv('ADMIN_IDS', '').split(',') if id.strip()]
 BOT_OWNER = "@iberic_owner"
 BOT_NAME = "🔍 ULP Searcher Bot"
-BOT_VERSION = "7.0 COMPLETE EN"
+BOT_VERSION = "7.1 COMPLETE EN - CORREGIDO"
 MAX_FREE_CREDITS = 2  # ✅ 2 free credits
 RESET_HOUR = 0
 
@@ -80,7 +81,7 @@ def health():
     return jsonify({"status": "healthy"})
 
 # ============================================================================
-# SEARCH ENGINE
+# SEARCH ENGINE - CORREGIDO: SIN LÍMITES
 # ============================================================================
 
 class SearchEngine:
@@ -93,14 +94,12 @@ class SearchEngine:
         self.data_files = glob.glob(os.path.join(self.data_dir, "*.txt"))
         logger.info(f"📂 Loaded {len(self.data_files)} files")
     
-    def search_domain(self, domain: str, max_results: int = 10000) -> Tuple[int, List[str]]:
+    def search_domain(self, domain: str, max_results: int = None) -> Tuple[int, List[str]]:
+        """Busca dominio SIN LÍMITE (o con límite opcional)"""
         results = []
         domain_lower = domain.lower()
         
         for file_path in self.data_files:
-            if len(results) >= max_results:
-                break
-            
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     for line in f:
@@ -111,7 +110,8 @@ class SearchEngine:
                         if domain_lower in line.lower():
                             results.append(line)
                         
-                        if len(results) >= max_results:
+                        # Solo aplicar límite si se especifica
+                        if max_results and len(results) >= max_results:
                             break
             
             except Exception as e:
@@ -120,14 +120,11 @@ class SearchEngine:
         
         return len(results), results
     
-    def search_email(self, email: str, max_results: int = 5000) -> Tuple[int, List[str]]:
+    def search_email(self, email: str, max_results: int = None) -> Tuple[int, List[str]]:
         results = []
         email_lower = email.lower()
         
         for file_path in self.data_files:
-            if len(results) >= max_results:
-                break
-            
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     for line in f:
@@ -138,7 +135,7 @@ class SearchEngine:
                         if email_lower in line.lower():
                             results.append(line)
                         
-                        if len(results) >= max_results:
+                        if max_results and len(results) >= max_results:
                             break
             
             except Exception as e:
@@ -147,14 +144,11 @@ class SearchEngine:
         
         return len(results), results
     
-    def search_login(self, login: str, max_results: int = 5000) -> Tuple[int, List[str]]:
+    def search_login(self, login: str, max_results: int = None) -> Tuple[int, List[str]]:
         results = []
         login_lower = login.lower()
         
         for file_path in self.data_files:
-            if len(results) >= max_results:
-                break
-            
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     for line in f:
@@ -168,7 +162,7 @@ class SearchEngine:
                                 if login_lower in parts[0].lower():
                                     results.append(line)
                         
-                        if len(results) >= max_results:
+                        if max_results and len(results) >= max_results:
                             break
             
             except Exception as e:
@@ -177,14 +171,11 @@ class SearchEngine:
         
         return len(results), results
     
-    def search_password(self, password: str, max_results: int = 5000) -> Tuple[int, List[str]]:
+    def search_password(self, password: str, max_results: int = None) -> Tuple[int, List[str]]:
         results = []
         password_lower = password.lower()
         
         for file_path in self.data_files:
-            if len(results) >= max_results:
-                break
-            
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     for line in f:
@@ -195,7 +186,7 @@ class SearchEngine:
                         if password_lower in line.lower():
                             results.append(line)
                         
-                        if len(results) >= max_results:
+                        if max_results and len(results) >= max_results:
                             break
             
             except Exception as e:
@@ -204,14 +195,11 @@ class SearchEngine:
         
         return len(results), results
     
-    def search_dni(self, dni: str, max_results: int = 1000) -> Tuple[int, List[str]]:
+    def search_dni(self, dni: str, max_results: int = None) -> Tuple[int, List[str]]:
         results = []
         dni_clean = dni.upper().replace(' ', '').replace('-', '')
         
         for file_path in self.data_files:
-            if len(results) >= max_results:
-                break
-            
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     for line in f:
@@ -222,7 +210,7 @@ class SearchEngine:
                         if dni_clean in line.upper().replace(' ', '').replace('-', ''):
                             results.append(line)
                         
-                        if len(results) >= max_results:
+                        if max_results and len(results) >= max_results:
                             break
             
             except Exception as e:
@@ -271,7 +259,7 @@ class CreditSystem:
                     user_id INTEGER PRIMARY KEY,
                     username TEXT,
                     first_name TEXT,
-                    daily_credits INTEGER DEFAULT 2,  -- ✅ 2 free credits
+                    daily_credits INTEGER DEFAULT 2,
                     extra_credits INTEGER DEFAULT 0,
                     total_searches INTEGER DEFAULT 0,
                     referrals_count INTEGER DEFAULT 0,
@@ -616,7 +604,7 @@ class CreditSystem:
             return stats
 
 # ============================================================================
-# MAIN BOT
+# MAIN BOT - CORREGIDO: FILTRO DE FORMATOS Y SIEMPRE ARCHIVOS
 # ============================================================================
 
 class ULPBot:
@@ -756,10 +744,12 @@ class ULPBot:
         
         search_data = self.pending_searches[user_id]
         domain = search_data["query"]
+        selected_format = query.data
         
         await query.edit_message_text(f"🔄 <b>Searching {self.escape_html(domain)}...</b>", parse_mode='HTML')
         
-        total_found, results = self.search_engine.search_domain(domain)
+        # Buscar TODOS los resultados SIN LÍMITE
+        total_found, all_results = self.search_engine.search_domain(domain, max_results=None)
         
         if total_found == 0:
             await query.edit_message_text(
@@ -772,7 +762,36 @@ class ULPBot:
             del self.pending_searches[user_id]
             return ConversationHandler.END
         
-        if not self.credit_system.use_credits(user_id, "domain", domain, total_found):
+        # FILTRAR según el formato seleccionado
+        filtered_results = []
+        for line in all_results:
+            line = line.strip()
+            if selected_format == "format_emailpass":
+                # SOLO email:password (exactamente dos campos, con @ en el primero)
+                parts = line.split(':')
+                if len(parts) == 2 and '@' in parts[0] and '.' in parts[0]:
+                    filtered_results.append(line)
+            elif selected_format == "format_urlemailpass":
+                # url:email:password (tres o más campos)
+                if line.count(':') >= 2:
+                    filtered_results.append(line)
+        
+        # Si no hay resultados después del filtro
+        if not filtered_results:
+            await query.edit_message_text(
+                f"<b>❌ NO RESULTS IN SELECTED FORMAT</b>\n\n"
+                f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
+                f"<b>Total found (all formats):</b> <code>{total_found}</code>\n"
+                f"<b>Format selected:</b> {'email:pass' if selected_format == 'format_emailpass' else 'url:email:pass'}\n"
+                f"<b>Results in this format:</b> <code>0</code>\n\n"
+                f"💰 <b>Credit NOT consumed</b>",
+                parse_mode='HTML'
+            )
+            del self.pending_searches[user_id]
+            return ConversationHandler.END
+        
+        # CONSUMIR CRÉDITO SOLO AHORA
+        if not self.credit_system.use_credits(user_id, "domain", domain, len(filtered_results)):
             await query.edit_message_text("<b>❌ Error using credits</b>", parse_mode='HTML')
             del self.pending_searches[user_id]
             return ConversationHandler.END
@@ -780,56 +799,55 @@ class ULPBot:
         total_credits = self.credit_system.get_user_credits(user_id)
         daily_credits = self.credit_system.get_daily_credits_left(user_id)
         
-        # ✅ ENTREGA DE RESULTADOS SEGÚN CANTIDAD
-        if total_found < 100:
-            await self.send_results_as_message(query, results, domain, total_found, daily_credits, total_credits)
-        elif total_found <= 10000:
-            await self.send_results_as_txt(query, results, domain, total_found, daily_credits, total_credits)
+        # 🚨 NUEVA LÓGICA: SIEMPRE ARCHIVO, NUNCA MENSAJE DIRECTO
+        # < 5000 líneas → .txt
+        # >= 5000 líneas → .zip (dividido)
+        
+        if len(filtered_results) < 5000:
+            await self.send_results_as_txt(
+                query, 
+                filtered_results, 
+                domain, 
+                len(filtered_results), 
+                daily_credits, 
+                total_credits,
+                selected_format
+            )
         else:
-            await self.send_results_as_zip(query, results, domain, total_found, daily_credits, total_credits)
+            await self.send_results_as_zip(
+                query, 
+                filtered_results, 
+                domain, 
+                len(filtered_results), 
+                daily_credits, 
+                total_credits,
+                selected_format
+            )
         
         del self.pending_searches[user_id]
         return ConversationHandler.END
     
-    async def send_results_as_message(self, query_callback, results: list, domain: str, total_found: int, daily_credits: int, total_credits: int):
-        response = (
-            f"<b>✅ SEARCH COMPLETED</b>\n\n"
-            f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
-            f"<b>Results:</b> <code>{total_found}</code>\n"
-            f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-            f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-            f"<b>First results:</b>\n"
-            f"<pre>"
-        )
-        
-        for line in results[:10]:
-            if len(line) > 80:
-                line = line[:77] + "..."
-            response += f"{self.escape_html(line)}\n"
-        
-        response += "</pre>"
-        
-        if total_found > 10:
-            response += f"\n<b>... and {total_found-10} more results</b>"
-        
-        await query_callback.edit_message_text(response, parse_mode='HTML')
-    
-    async def send_results_as_txt(self, query_callback, results: list, domain: str, total_found: int, daily_credits: int, total_credits: int):
+    async def send_results_as_txt(self, query_callback, results: list, domain: str, total_found: int, 
+                                  daily_credits: int, total_credits: int, selected_format: str):
+        """Siempre envía como archivo .txt"""
         txt_buffer = io.BytesIO()
         content = "\n".join(results)
         txt_buffer.write(content.encode('utf-8'))
         txt_buffer.seek(0)
         
+        format_name = "email_pass" if selected_format == "format_emailpass" else "url_email_pass"
+        
         await query_callback.message.reply_document(
             document=txt_buffer,
-            filename=f"ulp_{domain}_{total_found}.txt",
+            filename=f"ulp_{domain}_{format_name}_{total_found}.txt",
             caption=(
                 f"<b>📁 RESULTS (TXT FILE)</b>\n\n"
                 f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
+                f"<b>Format:</b> <code>{format_name.replace('_', ':')}</code>\n"
                 f"<b>Results:</b> <code>{total_found}</code>\n"
                 f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
                 f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-                f"<i>Results: 100-10,000 → .txt file</i>"
+                f"<i>✓ Results delivered as .txt file</i>"
             ),
             parse_mode='HTML'
         )
@@ -837,38 +855,45 @@ class ULPBot:
         await query_callback.edit_message_text(
             f"<b>✅ SEARCH COMPLETED</b>\n\n"
             f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
+            f"<b>Format:</b> <code>{format_name.replace('_', ':')}</code>\n"
             f"<b>Results:</b> <code>{total_found}</code>\n"
             f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
             f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-            f"<i>Results sent as .txt file</i>",
+            f"<i>📎 Results sent as .txt file</i>",
             parse_mode='HTML'
         )
     
-    async def send_results_as_zip(self, query_callback, results: list, domain: str, total_found: int, daily_credits: int, total_credits: int):
-        # Create multiple txt files if results are too many
+    async def send_results_as_zip(self, query_callback, results: list, domain: str, total_found: int,
+                                  daily_credits: int, total_credits: int, selected_format: str):
+        """Divide en partes de 5000 líneas y comprime"""
         zip_buffer = io.BytesIO()
+        format_name = "email_pass" if selected_format == "format_emailpass" else "url_email_pass"
         
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            # Split results into chunks of 5000
             chunk_size = 5000
+            total_parts = (len(results) + chunk_size - 1) // chunk_size
+            
             for i in range(0, len(results), chunk_size):
                 chunk = results[i:i + chunk_size]
                 content = "\n".join(chunk)
-                filename = f"ulp_{domain}_part{i//chunk_size + 1}.txt"
+                part_num = i // chunk_size + 1
+                filename = f"ulp_{domain}_{format_name}_part{part_num}_of_{total_parts}.txt"
                 zip_file.writestr(filename, content)
         
         zip_buffer.seek(0)
         
         await query_callback.message.reply_document(
             document=zip_buffer,
-            filename=f"ulp_{domain}_{total_found}.zip",
+            filename=f"ulp_{domain}_{format_name}_{total_found}.zip",
             caption=(
-                f"<b>📁 RESULTS (ZIP FILE)</b>\n\n"
+                f"<b>📦 RESULTS (ZIP FILE)</b>\n\n"
                 f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
+                f"<b>Format:</b> <code>{format_name.replace('_', ':')}</code>\n"
                 f"<b>Results:</b> <code>{total_found}</code>\n"
+                f"<b>Parts:</b> <code>{(total_found + 4999) // 5000}</code> files\n"
                 f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
                 f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-                f"<i>Results: >10,000 → .zip file</i>"
+                f"<i>📎 Results sent as .zip file ({total_found} lines)</i>"
             ),
             parse_mode='HTML'
         )
@@ -876,10 +901,11 @@ class ULPBot:
         await query_callback.edit_message_text(
             f"<b>✅ SEARCH COMPLETED</b>\n\n"
             f"<b>Domain:</b> <code>{self.escape_html(domain)}</code>\n"
+            f"<b>Format:</b> <code>{format_name.replace('_', ':')}</code>\n"
             f"<b>Results:</b> <code>{total_found}</code>\n"
             f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
             f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-            f"<i>Results sent as .zip file (multiple files inside)</i>",
+            f"<i>📦 Results sent as .zip file (split into parts)</i>",
             parse_mode='HTML'
         )
     
@@ -904,7 +930,7 @@ class ULPBot:
         email = context.args[0].lower()
         msg = await update.message.reply_text(f"📧 <b>Searching {self.escape_html(email)}...</b>", parse_mode='HTML')
         
-        total_found, results = self.search_engine.search_email(email)
+        total_found, results = self.search_engine.search_email(email, max_results=None)
         
         if total_found == 0:
             await msg.edit_text(
@@ -921,22 +947,47 @@ class ULPBot:
         total_credits = self.credit_system.get_user_credits(user_id)
         daily_credits = self.credit_system.get_daily_credits_left(user_id)
         
-        response = (
-            f"<b>✅ EMAIL FOUND</b>\n\n"
-            f"<b>Email:</b> <code>{self.escape_html(email)}</code>\n"
-            f"<b>Results:</b> <code>{total_found}</code>\n"
-            f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-            f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-            f"<b>First results:</b>\n"
-            f"<pre>"
-        )
-        
-        for line in results[:5]:
-            response += f"{self.escape_html(line)}\n"
-        
-        response += "</pre>"
-        
-        await msg.edit_text(response, parse_mode='HTML')
+        # Siempre archivo, nunca mensaje
+        if total_found < 5000:
+            txt_buffer = io.BytesIO()
+            txt_buffer.write("\n".join(results).encode('utf-8'))
+            txt_buffer.seek(0)
+            
+            await msg.reply_document(
+                document=txt_buffer,
+                filename=f"ulp_email_{email}_{total_found}.txt",
+                caption=(
+                    f"<b>📁 EMAIL RESULTS</b>\n\n"
+                    f"<b>Email:</b> <code>{self.escape_html(email)}</code>\n"
+                    f"<b>Results:</b> <code>{total_found}</code>\n"
+                    f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
+                    f"<b>Total credits:</b> <code>{total_credits}</code>"
+                ),
+                parse_mode='HTML'
+            )
+            await msg.edit_text(f"<b>✅ Email search completed</b>", parse_mode='HTML')
+        else:
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                for i in range(0, len(results), 5000):
+                    chunk = results[i:i+5000]
+                    content = "\n".join(chunk)
+                    zip_file.writestr(f"ulp_email_{email}_part{i//5000+1}.txt", content)
+            zip_buffer.seek(0)
+            
+            await msg.reply_document(
+                document=zip_buffer,
+                filename=f"ulp_email_{email}_{total_found}.zip",
+                caption=(
+                    f"<b>📦 EMAIL RESULTS</b>\n\n"
+                    f"<b>Email:</b> <code>{self.escape_html(email)}</code>\n"
+                    f"<b>Results:</b> <code>{total_found}</code>\n"
+                    f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
+                    f"<b>Total credits:</b> <code>{total_credits}</code>"
+                ),
+                parse_mode='HTML'
+            )
+            await msg.edit_text(f"<b>✅ Email search completed</b>", parse_mode='HTML')
     
     async def login_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -959,7 +1010,7 @@ class ULPBot:
         login = context.args[0].lower()
         msg = await update.message.reply_text(f"👤 <b>Searching {self.escape_html(login)}...</b>", parse_mode='HTML')
         
-        total_found, results = self.search_engine.search_login(login)
+        total_found, results = self.search_engine.search_login(login, max_results=None)
         
         if total_found == 0:
             await msg.edit_text(
@@ -976,22 +1027,25 @@ class ULPBot:
         total_credits = self.credit_system.get_user_credits(user_id)
         daily_credits = self.credit_system.get_daily_credits_left(user_id)
         
-        response = (
-            f"<b>✅ LOGIN FOUND</b>\n\n"
-            f"<b>Login:</b> <code>{self.escape_html(login)}</code>\n"
-            f"<b>Results:</b> <code>{total_found}</code>\n"
-            f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-            f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-            f"<b>First results:</b>\n"
-            f"<pre>"
+        # Siempre archivo
+        txt_buffer = io.BytesIO()
+        txt_buffer.write("\n".join(results).encode('utf-8'))
+        txt_buffer.seek(0)
+        
+        await msg.reply_document(
+            document=txt_buffer,
+            filename=f"ulp_login_{login}_{total_found}.txt",
+            caption=(
+                f"<b>📁 LOGIN RESULTS</b>\n\n"
+                f"<b>Login:</b> <code>{self.escape_html(login)}</code>\n"
+                f"<b>Results:</b> <code>{total_found}</code>\n"
+                f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
+                f"<b>Total credits:</b> <code>{total_credits}</code>"
+            ),
+            parse_mode='HTML'
         )
         
-        for line in results[:5]:
-            response += f"{self.escape_html(line)}\n"
-        
-        response += "</pre>"
-        
-        await msg.edit_text(response, parse_mode='HTML')
+        await msg.edit_text(f"<b>✅ Login search completed</b>", parse_mode='HTML')
     
     async def pass_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -1014,7 +1068,7 @@ class ULPBot:
         password = context.args[0].lower()
         msg = await update.message.reply_text(f"🔑 <b>Searching password...</b>", parse_mode='HTML')
         
-        total_found, results = self.search_engine.search_password(password)
+        total_found, results = self.search_engine.search_password(password, max_results=None)
         
         if total_found == 0:
             await msg.edit_text(
@@ -1031,23 +1085,25 @@ class ULPBot:
         total_credits = self.credit_system.get_user_credits(user_id)
         daily_credits = self.credit_system.get_daily_credits_left(user_id)
         
-        response = (
-            f"<b>✅ PASSWORD FOUND</b>\n\n"
-            f"<b>Password search:</b> <code>********</code>\n"
-            f"<b>Results:</b> <code>{total_found}</code>\n"
-            f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-            f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-            f"<b>First results:</b>\n"
-            f"<pre>"
+        # Siempre archivo
+        txt_buffer = io.BytesIO()
+        txt_buffer.write("\n".join(results).encode('utf-8'))
+        txt_buffer.seek(0)
+        
+        await msg.reply_document(
+            document=txt_buffer,
+            filename=f"ulp_password_search_{total_found}.txt",
+            caption=(
+                f"<b>📁 PASSWORD RESULTS</b>\n\n"
+                f"<b>Password searched:</b> <code>********</code>\n"
+                f"<b>Results:</b> <code>{total_found}</code>\n"
+                f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
+                f"<b>Total credits:</b> <code>{total_credits}</code>"
+            ),
+            parse_mode='HTML'
         )
         
-        for line in results[:5]:
-            line = line.replace(password, "***" + password[-3:] if len(password) > 3 else "***")
-            response += f"{self.escape_html(line)}\n"
-        
-        response += "</pre>"
-        
-        await msg.edit_text(response, parse_mode='HTML')
+        await msg.edit_text(f"<b>✅ Password search completed</b>", parse_mode='HTML')
     
     async def dni_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -1070,7 +1126,7 @@ class ULPBot:
         dni = context.args[0].upper()
         msg = await update.message.reply_text(f"🆔 <b>Searching {self.escape_html(dni)}...</b>", parse_mode='HTML')
         
-        total_found, results = self.search_engine.search_dni(dni)
+        total_found, results = self.search_engine.search_dni(dni, max_results=None)
         
         if total_found == 0:
             await msg.edit_text(
@@ -1087,22 +1143,25 @@ class ULPBot:
         total_credits = self.credit_system.get_user_credits(user_id)
         daily_credits = self.credit_system.get_daily_credits_left(user_id)
         
-        response = (
-            f"<b>✅ DNI FOUND</b>\n\n"
-            f"<b>DNI:</b> <code>{self.escape_html(dni)}</code>\n"
-            f"<b>Results:</b> <code>{total_found}</code>\n"
-            f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
-            f"<b>Total credits:</b> <code>{total_credits}</code>\n\n"
-            f"<b>First results:</b>\n"
-            f"<pre>"
+        # Siempre archivo
+        txt_buffer = io.BytesIO()
+        txt_buffer.write("\n".join(results).encode('utf-8'))
+        txt_buffer.seek(0)
+        
+        await msg.reply_document(
+            document=txt_buffer,
+            filename=f"ulp_dni_{dni}_{total_found}.txt",
+            caption=(
+                f"<b>📁 DNI RESULTS</b>\n\n"
+                f"<b>DNI:</b> <code>{self.escape_html(dni)}</code>\n"
+                f"<b>Results:</b> <code>{total_found}</code>\n"
+                f"<b>Daily credits left:</b> <code>{daily_credits}</code>\n"
+                f"<b>Total credits:</b> <code>{total_credits}</code>"
+            ),
+            parse_mode='HTML'
         )
         
-        for line in results[:5]:
-            response += f"{self.escape_html(line)}\n"
-        
-        response += "</pre>"
-        
-        await msg.edit_text(response, parse_mode='HTML')
+        await msg.edit_text(f"<b>✅ DNI search completed</b>", parse_mode='HTML')
     
     async def mycredits_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
@@ -1243,9 +1302,8 @@ class ULPBot:
             f"<b>📊 CREDIT VALUES:</b>\n"
             f"🔍 <b>1 credit</b> = <b>1 search</b>\n"
             f"📁 <b>Results delivery:</b>\n"
-            f"  • <100 results → In message\n"
-            f"  • 100-10,000 → .txt file\n"
-            f"  • >10,000 → .zip file\n\n"
+            f"  • <5000 results → .txt file\n"
+            f"  • ≥5000 results → .zip file (split into parts)\n\n"
             
             f"<b>💡 TIPS:</b>\n"
             f"• Use specific terms for better results\n"
@@ -1288,9 +1346,9 @@ class ULPBot:
             f"• email only\n\n"
             
             f"<b>📁 RESULTS DELIVERY:</b>\n"
-            f"• <100 results → Message\n"
-            f"• 100-10,000 → .txt file\n"
-            f"• >10,000 → .zip file\n\n"
+            f"• ALL results are delivered as files\n"
+            f"• <5000 results → .txt file\n"
+            f"• ≥5000 results → .zip file (split)\n\n"
             
             f"<i>For support contact {BOT_OWNER}</i>"
         )
@@ -1315,9 +1373,7 @@ class ULPBot:
             
             f"<b>📋 FORMATS FOR /search:</b>\n"
             f"• email:password\n"
-            f"• url:email:password\n"
-            f"• login:pass\n"
-            f"• email only\n\n"
+            f"• url:email:password\n\n"
             
             f"<b>💰 PERSONAL COMMANDS:</b>\n"
             f"<code>/mycredits</code> - View your credits\n"
@@ -1338,9 +1394,9 @@ class ULPBot:
             f"<code>/upload</code> - Upload ULP file\n\n"
             
             f"<b>📁 RESULTS DELIVERY:</b>\n"
-            f"• <100 results → Message\n"
-            f"• 100-10,000 → .txt file\n"
-            f"• >10,000 → .zip file\n\n"
+            f"• <5000 results → .txt file\n"
+            f"• ≥5000 results → .zip file (split into parts)\n"
+            f"• NO results shown in message\n\n"
             
             f"<b>💡 TIPS:</b>\n"
             f"• Use specific terms for better results\n"
@@ -1558,7 +1614,6 @@ class ULPBot:
                 )
                 sent_count += 1
                 
-                # Small delay to avoid rate limits
                 if sent_count % 10 == 0:
                     await msg.edit_text(
                         f"📢 <b>BROADCAST IN PROGRESS</b>\n\n"
@@ -1574,7 +1629,6 @@ class ULPBot:
                 failed_count += 1
                 logger.error(f"Failed to send to {user}: {e}")
         
-        # Save broadcast statistics
         self.credit_system.save_broadcast(user_id, message_text, sent_count, failed_count)
         
         await msg.edit_text(
@@ -1734,8 +1788,6 @@ class ULPBot:
 # MAIN EXECUTION
 # ============================================================================
 
-import asyncio
-
 def run_flask():
     app.run(host='0.0.0.0', port=PORT, threaded=True)
 
@@ -1756,7 +1808,8 @@ def main():
                 CallbackQueryHandler(bot.format_selected_handler, pattern='^format_')
             ]
         },
-        fallbacks=[CommandHandler('cancel', lambda u, c: ConversationHandler.END)]
+        fallbacks=[CommandHandler('cancel', lambda u, c: ConversationHandler.END)],
+        per_message=False
     )
     
     # Broadcast handlers
@@ -1789,7 +1842,7 @@ def main():
     application.add_handler(CommandHandler("userinfo", bot.userinfo_command))
     application.add_handler(CommandHandler("stats", bot.stats_command))
     application.add_handler(CommandHandler("userslist", bot.userslist_command))
-    application.add_handler(broadcast_conv)  # ✅ BROADCAST ADDED
+    application.add_handler(broadcast_conv)
     application.add_handler(MessageHandler(filters.Document.ALL, bot.handle_document))
     
     # Button handlers
